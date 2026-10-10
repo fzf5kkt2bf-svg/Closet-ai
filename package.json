@@ -1,22 +1,26 @@
 {
   "name": "meu-closet-ai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint .",
-    "test": "node --import tsx tests/closet.test.ts",
-    "test:e2e": "playwright test"
+    "test": "node --import tsx tests/closet.test.ts && node --import tsx tests/supabase.test.ts && node --import tsx tests/migration.test.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "test:e2e:auth": "playwright test -c playwright.auth.config.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4.1.0",
     "@types/node": "^22.0.0",

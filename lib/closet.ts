@@ -25,6 +25,8 @@ export type Piece = {
   category: Category;
   color: keyof typeof colors;
   occasions: Occasion[];
+  style?: string;
+  photoPath?: string;
   image?: string;
   demo?: boolean;
 };
@@ -107,6 +109,24 @@ export function generateLooks(pieces: Piece[], occasion: Occasion): string[][] {
     .map((base, i) =>
       [...base, ...(extras[i] ? [extras[i]] : [])].map((p) => p.id),
     );
+}
+export function findSavedLook(
+  looks: Look[],
+  candidate: Look,
+): Look | undefined {
+  return (
+    looks.find((look) => look.id === candidate.id) ??
+    (candidate.id.startsWith("suggestion-")
+      ? looks.find(
+          (look) =>
+            look.occasion === candidate.occasion &&
+            look.pieceIds.length === candidate.pieceIds.length &&
+            look.pieceIds.every(
+              (id, index) => id === candidate.pieceIds[index],
+            ),
+        )
+      : undefined)
+  );
 }
 export function removePiece(data: ClosetData, id: string): ClosetData {
   return {

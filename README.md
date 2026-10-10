@@ -1,64 +1,62 @@
-# Meu Closet AI
+# Meu Closet AI · V2
 
-Guarda-roupa digital em português brasileiro, feito com Next.js App Router, TypeScript, Tailwind CSS e React. Protótipo sem backend, contas ou chamadas a serviços de IA.
+Guarda-roupa digital em português brasileiro, feito com Next.js App Router, TypeScript, Tailwind CSS e Supabase. As cinco telas da V1 continuam disponíveis: Início, Meu Guarda-Roupa, Adicionar Peça, Montar Look e Meus Looks.
 
-## Rodar localmente
+## Instalação
 
-Requer Node.js 20.9+ (recomendado Node 22 ou 24) e npm.
+Requer Node.js 20.9+ e npm.
 
 ```sh
 npm install
+cp .env.example .env.local
 npm run dev
 ```
 
-Abra http://localhost:3000. Para testar no iPhone, use a mesma rede e o IP local do computador; câmera e instalação funcionam melhor em HTTPS, como no preview da Vercel. A escolha de câmera/galeria depende das opções oferecidas pelo Safari/iOS.
+Preencha `.env.local` com a URL do seu projeto e a **publishable key** do Supabase. Abra http://localhost:3000. Sem as variáveis, o aplicativo exibe uma mensagem de configuração e permite apenas o modo de demonstração. Nunca use `service_role` ou uma chave secreta no navegador. `.env.local` é ignorado pelo Git.
 
-## Funcionalidades
+## Configurar o Supabase manualmente
 
-- Início com resumo, atalhos e sugestões baseadas no catálogo.
-- Catálogo com busca sem acentos, filtros por categoria e cor e detalhes acessíveis em diálogo.
-- Cadastro, edição e exclusão de peças, com foto opcional da câmera ou galeria. Imagens de até 20 MB são convertidas para JPEG com lado máximo de 1.200 px. Se o navegador não decodificar HEIC, use JPEG/PNG/WebP.
-- 12 peças fictícias marcadas como DEMO, com ilustrações SVG originais. Nenhuma imagem externa ou fonte remota.
-- Até três looks únicos por ocasião, com vestido OU blusa + calça/saia, sempre com calçado. Apenas peças cadastradas compatíveis com a ocasião são usadas; cores neutras têm prioridade. A saída é determinística e não usa IA. Quando há menos possibilidades, gera menos looks e informa a quantidade.
-- Histórico de combinações geradas, favoritos e exclusão de looks. Excluir uma peça remove os looks que a utilizam. Editar uma peça atualiza sua representação nos looks existentes; o histórico guarda referências, não fotografias imutáveis.
-- Interface mobile-first, navegação fixa com safe area, campos de 16 px no mobile para evitar zoom de formulário no Safari, foco visível, rótulos, avisos acessíveis e respeito a movimento reduzido.
+1. Crie um projeto Supabase. Em **Project Settings → API**, copie a Project URL e a publishable key (`sb_publishable_...`; para projetos antigos, a chave pública `anon` pode ser usada no mesmo campo). Preencha `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` em `.env.local`. Essas variáveis são públicas no bundle: a proteção dos dados depende das políticas RLS, não do sigilo da chave.
+2. Abra **SQL Editor** no painel Supabase. Revise e execute [a migration inicial](supabase/migrations/20261010000000_initial.sql) uma vez no projeto desejado. Ela cria `profiles`, `clothing_items`, `outfits`, `outfit_items`, índices, funções, triggers, políticas RLS e o bucket privado `clothing-photos-private`. Não execute repetidamente: alguns triggers e políticas são criados uma única vez. A migration não apaga registros ou arquivos existentes. Se encontrar tabelas ou bucket com os mesmos nomes, ela interrompe a execução para evitar alterar dados anteriores; revise o conflito antes de aplicar. Verifique no painel que o bucket está marcado como **Private**.
+3. Em **Authentication → URL Configuration**, configure a Site URL de produção e adicione `http://localhost:3000` e as URLs HTTPS usadas na Vercel em Redirect URLs. Os links de confirmação de e-mail e recuperação redirecionam para a origem atual do aplicativo. Ative o provedor de e-mail e defina a política de confirmação desejada. Para envio confiável em produção, configure SMTP no Supabase.
+4. Reinicie `npm run dev` depois de mudar variáveis de ambiente. Cadastre uma conta e confirme o e-mail, se a confirmação estiver ativa. A tabela `profiles` é preenchida por um trigger após o cadastro; a migration também cria perfis para usuários já existentes, sem sobrescrever perfis.
 
-## Persistência e privacidade
+**Segurança:** as quatro tabelas usam RLS com `auth.uid()`. As chaves estrangeiras compostas de `outfit_items` impedem relacionar looks e peças de usuários distintos. As políticas de Storage limitam operações ao prefixo `<id-do-usuário>/` do bucket privado. As fotos são mostradas por links assinados de curta duração (10 minutos), renovados com a página ativa. Quem receber um link assinado poderá abri-lo até expirar; não compartilhe esses links.
 
-Peças, fotos e looks são salvos no IndexedDB deste navegador. As peças de demonstração aparecem na primeira utilização; um catálogo salvo vazio permanece vazio. Não há envio das fotos a servidores, autenticação, sincronização ou backup. Limpar os dados do site, trocar de navegador/dispositivo ou encerrar uma sessão privada pode perder o catálogo. Use uma única aba para editar: não há resolução de alterações concorrentes entre abas. Em caso de falha de escrita, a interface mantém o estado anterior e mostra um aviso. O servidor recebe somente pedidos da aplicação, nunca o catálogo.
+## Dados da V1 e demonstração
 
-## Verificações
+O modo demonstração é separado da conta: mostra 12 peças ilustrativas, permite testar a geração de looks e mantém o histórico somente em memória até sair ou recarregar. Peças fictícias nunca são enviadas ao Supabase. A conta pessoal começa vazia.
+
+Se este navegador tiver peças reais salvas pela V1, aparece **Importar da V1** após entrar na conta. A importação é opcional, ignora peças de demonstração e copia fotos e looks válidos. Pode ser retomada se a conexão falhar; IDs estáveis evitam duplicatas. O IndexedDB da V1 permanece intacto, sem exclusão ou migração automática. Confira a conta antes de limpar os dados antigos do navegador. A importação só alcança os dados da V1 presentes **neste mesmo navegador e origem**.
+
+## Fotos e falhas
+
+A câmera e a galeria usam seletores de arquivo do iPhone. Imagens de até 20 MB são decodificadas e convertidas em JPEG (lado máximo de 1.200 px) antes do upload; o bucket aceita JPEG de até 6 MB. Se o Safari não decodificar um HEIC, exporte a foto como JPEG. A foto é opcional e peças sem foto usam SVGs originais.
+
+Ao substituir uma foto, o aplicativo envia a nova, grava o novo caminho na peça e só então remove a antiga. Se a gravação falhar, tenta remover o arquivo recém-enviado. Ao excluir uma peça, exclui primeiro o registro e seus looks relacionados, depois remove a foto. Se a limpeza do Storage falhar, um aviso indica o possível arquivo órfão; a operação de banco já concluída não é revertida. Links das fotos são temporários. Fotos pessoais não são armazenadas no IndexedDB da V2 e não há imagens externas de demonstração.
+
+## Testes
 
 ```sh
+npm run typecheck
 npm run lint
 npm test
 npm run build
-npm start
-```
-
-Para testar o fluxo no navegador, faça o build e execute:
-
-```sh
-npx playwright install chromium
 npm run test:e2e
+npm run test:e2e:auth
 ```
 
-O teste usa viewport de 390 × 844 px no Chromium. Se houver Chromium em `/usr/bin/chromium`, ele será utilizado; para outro executável, defina `PLAYWRIGHT_CHROMIUM_PATH`. O servidor de produção é iniciado pelo Playwright.
-
-Os testes cobrem integridade, compatibilidade de ocasião, determinismo, escassez de peças e exclusão de looks dependentes.
-
-Checklist manual no Safari/iPhone: cadastrar foto pela câmera e galeria; editar e excluir; buscar/filtrar; gerar cada ocasião; salvar favorito; recarregar e conferir persistência; testar área segura, orientação, teclado e navegação por VoiceOver. Verificação automatizada em ambiente Linux não substitui validação em um iPhone físico.
+Os testes de interface usam Chromium em viewport de iPhone e rodam sem acesso ao seu projeto Supabase. O teste `test:e2e:auth` simula a API para verificar cadastro, login, recuperação, peça com foto, edição e exclusão. Os testes de banco executam a migration em PostgreSQL local (PGlite) e verificam RLS entre dois usuários. Por padrão usa `/usr/bin/chromium` se disponível; em outro ambiente, execute `npx playwright install chromium` ou defina `PLAYWRIGHT_CHROMIUM_PATH`. Testes locais não substituem a validação manual da câmera, galeria, links de e-mail, área segura e instalação em um iPhone físico com Safari.
 
 ## Publicar na Vercel
 
-1. Faça push da branch e revise/integre o PR.
-2. Em Vercel, importe este repositório e escolha o framework Next.js.
-3. Use a raiz do repositório, instalação `npm install` (ou `npm ci`), build `npm run build` e as configurações padrão de saída do Next.js.
-4. Nenhuma variável de ambiente ou segredo é necessário. Deploys de PR geram previews HTTPS para teste no iPhone.
-5. Publique o deployment após revisão. Os dados ficam isolados por origem: preview e domínio de produção têm closets separados.
+1. Revise e integre o PR; importe o repositório ou atualize o deployment existente na Vercel, usando Next.js e a raiz do repositório.
+2. No projeto Vercel, configure `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` para os ambientes desejados. Faça novo deploy após alterar as variáveis, pois Next.js inclui as variáveis `NEXT_PUBLIC_` no build do cliente. Não configure uma chave `service_role` no cliente.
+3. Adicione o domínio de produção e os domínios de preview que serão usados nas Redirect URLs do Supabase. Teste cadastro, confirmação e recuperação de acesso em HTTPS.
+4. Execute a migration manualmente no projeto Supabase correto **antes** de liberar a V2. Faça backup do projeto Supabase pelos mecanismos da sua conta antes de mudanças futuras de schema.
 
-## Preparação para PWA e próxima fase
+Manifesto, ícones, metadados iOS e service worker permitem instalar o site na Tela de Início. O shell do app pode abrir offline após uma visita; login, dados pessoais e fotos privadas exigem rede. Nenhum dado de conta ou resposta do Supabase é armazenado no cache do service worker.
 
-Manifesto, ícones PNG (192/512), ícone Apple (180), tema, modo standalone e metadados iOS incluídos. O Safari pode adicionar o site à Tela de Início. Ainda não há service worker, cache offline garantido ou atualização controlada de PWA.
+## Escopo
 
-Backend futuro: autenticação, sincronização entre dispositivos, backup/exportação, armazenamento remoto de fotos, regras de acesso, recuperação de conta e limites por usuário. Uma eventual integração de IA deve ocorrer em servidor, com segredos em variáveis de ambiente e consentimento para envio das fotos. OpenAI e Supabase não estão integrados nesta versão.
+A V2 oferece autenticação por e-mail, recuperação de senha, dados por usuário e Storage privado. A geração de looks segue regras determinísticas locais sobre as peças carregadas da conta. Ainda não há análise de moda por IA, compartilhamento entre contas ou acesso offline aos dados pessoais.
