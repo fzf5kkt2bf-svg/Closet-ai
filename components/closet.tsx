@@ -25,13 +25,23 @@ import {
   colors,
   occasions,
   generateLooks,
-  removePiece,
+  findSavedLook,
+  demoPieces,
   type Piece,
   type Look,
   type ClosetData,
   type Occasion,
 } from "@/lib/closet";
-import { readData, writeData, preparePhoto } from "@/lib/storage";
+import { preparePhoto, readLegacyData } from "@/lib/storage";
+import {
+  loadCloset,
+  savePiece,
+  deletePiece,
+  saveLook,
+  updateFavorite,
+  deleteLook,
+  importLegacyCloset,
+} from "@/lib/supabase";
 import Garment from "./garment";
 type Tab = "home" | "wardrobe" | "add" | "generate" | "looks";
 const tabs = [
@@ -48,8 +58,20 @@ const emptyPiece = (): Piece => ({
   color: "Branco",
   occasions: ["Casual"],
 });
-export default function Closet() {
-  const [data, setData] = useState<ClosetData | null>(null);
+export default function Closet({
+  mode,
+  userId,
+  onSignOut,
+  onLeaveDemo,
+}: {
+  mode: "personal" | "demo";
+  userId?: string;
+  onSignOut?: () => Promise<void>;
+  onLeaveDemo?: () => void;
+}) {
+  const [data, setData] = useState<ClosetData | null>(() =>
+    mode === "demo" ? { version: 1, pieces: demoPieces, looks: [] } : null,
+  );
   const [tab, setTab] = useState<Tab>("home");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -63,18 +85,42 @@ export default function Closet() {
   const [generated, setGenerated] = useState<Look[]>([]);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [legacyCount, setLegacyCount] = useState(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mutationLock = useRef(false);
   useEffect(() => {
-    readData()
-      .then(setData)
-      .catch(() =>
-        setError(
-          "Não foi possível abrir o armazenamento local. Permita o uso de dados do site e recarregue a página.",
-        ),
-      );
-  }, []);
+    if (mode === "demo") return;
+    if (!userId) return;
+    let active = true;
+    const refresh = () => {
+      if (document.visibilityState === "visible")
+        loadCloset(userId)
+          .then((next) => {
+            if (active) setData(next);
+          })
+          .catch(() => {
+            if (active)
+              setError(
+                "Não foi possível atualizar seu closet. Confira a conexão e tente novamente.",
+              );
+          });
+    };
+    refresh();
+    readLegacyData()
+      .then((legacy) => {
+        if (active)
+          setLegacyCount(legacy?.pieces.filter((p) => !p.demo).length ?? 0);
+      })
+      .catch(() => {});
+    document.addEventListener("visibilitychange", refresh);
+    const timer = window.setInterval(refresh, 8 * 60 * 1000);
+    return () => {
+      window.clearInterval(timer);
+      active = false;
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [mode, userId]);
   useEffect(() => {
     if (selected) dialogRef.current?.showModal();
     else dialogRef.current?.close();
@@ -83,23 +129,47 @@ export default function Closet() {
     setTab(next);
     setNotice("");
     setError("");
+    if (next === "add" && mode === "demo") {
+      setNotice(
+        "O cadastro de peças está disponível na sua conta pessoal. Entre ou crie uma conta para continuar.",
+      );
+      return;
+    }
     if (next === "add") setDraft(emptyPiece());
     window.scrollTo({ top: 0 });
     requestAnimationFrame(() => titleRef.current?.focus());
   }
-  async function persist(next: ClosetData, message: string) {
-    if (mutationLock.current) return false;
+  async function runMutation(
+    action: () => Promise<{ cleanupWarning?: boolean } | void>,
+    message: string,
+  ): Promise<boolean> {
+    if (mutationLock.current || mode !== "personal" || !userId) return false;
     mutationLock.current = true;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await writeData(next);
-      setData(next);
-      setNotice(message);
+      const result = await action();
+      try {
+        setData(await loadCloset(userId));
+      } catch {
+        setError(
+          "Alteração aplicada, mas não foi possível atualizar a tela. Recarregue a página.",
+        );
+        return false;
+      }
+      setNotice(
+        message +
+          (result?.cleanupWarning
+            ? " A foto antiga não pôde ser removida do Storage; verifique os arquivos órfãos."
+            : ""),
+      );
       return true;
-    } catch {
+    } catch (cause) {
       setError(
-        "Não foi possível salvar. O armazenamento pode estar cheio ou indisponível. Seus dados anteriores foram preservados.",
+        cause instanceof Error
+          ? `Não foi possível concluir: ${cause.message}`
+          : "Não foi possível concluir. Tente novamente.",
       );
       return false;
     } finally {
@@ -109,16 +179,27 @@ export default function Closet() {
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!draft || !data || !draft.name.trim() || !draft.occasions.length)
+    if (
+      !draft ||
+      !data ||
+      !userId ||
+      !draft.name.trim() ||
+      !draft.occasions.length ||
+      mode !== "personal"
+    )
       return;
-    const piece = { ...draft, name: draft.name.trim(), demo: false };
-    const next = {
-      ...data,
-      pieces: data.pieces.some((p) => p.id === piece.id)
-        ? data.pieces.map((p) => (p.id === piece.id ? piece : p))
-        : [...data.pieces, piece],
+    const piece = {
+      ...draft,
+      name: draft.name.trim(),
+      style: draft.style?.trim() ?? "",
     };
-    if (await persist(next, "Peça salva no seu guarda-roupa.")) {
+    const original = data.pieces.find((p) => p.id === piece.id);
+    if (
+      await runMutation(
+        () => savePiece(piece, userId, original),
+        "Peça salva no seu guarda-roupa.",
+      )
+    ) {
       setDraft(null);
       setTab("wardrobe");
     }
@@ -141,13 +222,15 @@ export default function Closet() {
   }
   async function generate() {
     if (!data) return;
-    const looks = generateLooks(data.pieces, occasion).map((pieceIds, i) => ({
-      id: crypto.randomUUID(),
-      pieceIds,
-      occasion,
-      favorite: false,
-      createdAt: new Date(Date.now() + i).toISOString(),
-    }));
+    const looks: Look[] = generateLooks(data.pieces, occasion).map(
+      (pieceIds, i) => ({
+        id: crypto.randomUUID(),
+        pieceIds,
+        occasion,
+        favorite: false,
+        createdAt: new Date(Date.now() + i).toISOString(),
+      }),
+    );
     if (!looks.length) {
       setGenerated([]);
       setNotice(
@@ -155,33 +238,135 @@ export default function Closet() {
       );
       return;
     }
-    if (
-      await persist(
-        { ...data, looks: [...looks, ...data.looks] },
-        `${looks.length} ${looks.length === 1 ? "combinação criada" : "combinações criadas"} e adicionadas ao histórico.`,
-      )
-    )
+    if (mode === "demo") {
+      setData({ ...data, looks: [...looks, ...data.looks] });
       setGenerated(looks);
+      setNotice("Looks fictícios criados apenas para esta demonstração.");
+      return;
+    }
+    if (!userId || mutationLock.current) return;
+    mutationLock.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const saved: Look[] = [];
+    try {
+      for (const look of looks) {
+        await saveLook(look, userId);
+        saved.push(look);
+      }
+      setGenerated(saved);
+      setNotice(
+        `${saved.length} ${saved.length === 1 ? "combinação salva" : "combinações salvas"} no seu histórico.`,
+      );
+    } catch (cause) {
+      setGenerated(saved);
+      setError(
+        `${saved.length} combinação(ões) foram salvas. A próxima falhou: ${cause instanceof Error ? cause.message : "tente novamente."}`,
+      );
+    } finally {
+      try {
+        setData(await loadCloset(userId));
+      } catch {
+        setError(
+          "Não foi possível atualizar a tela. Recarregue a página para consultar seus looks.",
+        );
+      }
+      mutationLock.current = false;
+      setBusy(false);
+    }
   }
   async function favorite(look: Look) {
     if (!data) return;
     const exists = data.looks.some((l) => l.id === look.id);
-    const updated = { ...look, favorite: !look.favorite };
-    await persist(
-      {
+    const updated = {
+      ...look,
+      id: mode === "personal" && !exists ? crypto.randomUUID() : look.id,
+      favorite: !look.favorite,
+    };
+    if (mode === "demo") {
+      setData({
         ...data,
         looks: exists
           ? data.looks.map((l) => (l.id === look.id ? updated : l))
           : [updated, ...data.looks],
-      },
+      });
+      return;
+    }
+    if (!userId) return;
+    await runMutation(
+      () =>
+        exists
+          ? updateFavorite(look.id, updated.favorite, userId)
+          : saveLook(updated, userId),
       updated.favorite
         ? "Look salvo nos favoritos."
         : "Look removido dos favoritos.",
     );
   }
+  async function removeLook(look: Look) {
+    if (!data) return;
+    if (mode === "demo") {
+      setData({ ...data, looks: data.looks.filter((l) => l.id !== look.id) });
+      return;
+    }
+    if (userId)
+      await runMutation(() => deleteLook(look.id, userId), "Look excluído.");
+  }
+  async function importOldCloset() {
+    if (!userId || mode !== "personal" || mutationLock.current) return;
+    mutationLock.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const legacy = await readLegacyData();
+      if (!legacy) {
+        setNotice("Nenhum catálogo da V1 foi encontrado neste navegador.");
+        return;
+      }
+      const imported = await importLegacyCloset(legacy, userId);
+      setNotice(
+        `${imported.pieces} peça(s) e ${imported.looks} look(s) importados. Os dados locais da V1 continuam intactos.`,
+      );
+    } catch (cause) {
+      setError(
+        `Importação interrompida: ${cause instanceof Error ? cause.message : "tente novamente."} Os itens já importados permanecem na conta; você pode tentar novamente. Os dados locais continuam intactos.`,
+      );
+    } finally {
+      try {
+        setData(await loadCloset(userId));
+      } catch {
+        setError("Não foi possível atualizar a tela. Recarregue a página.");
+      }
+      mutationLock.current = false;
+      setBusy(false);
+    }
+  }
+  async function removeSelectedPiece() {
+    if (
+      !data ||
+      !selected ||
+      mode !== "personal" ||
+      !userId ||
+      !window.confirm(
+        "Excluir esta peça? Os looks que a utilizam também serão removidos.",
+      )
+    )
+      return;
+    if (
+      await runMutation(
+        () => deletePiece(selected, userId),
+        "Peça e looks relacionados excluídos.",
+      )
+    ) {
+      setSelected(null);
+      setGenerated([]);
+    }
+  }
   function lookCard(look: Look, index: number) {
     if (!data) return null;
-    const current = data.looks.find((l) => l.id === look.id) ?? look;
+    const current = findSavedLook(data.looks, look) ?? look;
     const pieces = look.pieceIds
       .map((id) => data.pieces.find((p) => p.id === id))
       .filter((p): p is Piece => !!p);
@@ -273,15 +458,48 @@ export default function Closet() {
           </span>
         </Link>
         <span className="top-note">MENOS DÚVIDAS. MAIS VOCÊ.</span>
-        <span className="avatar" aria-label="Closet pessoal">
-          MC
-        </span>
+        <button
+          className="top-action"
+          onClick={async () => {
+            if (mode === "demo") onLeaveDemo?.();
+            else
+              try {
+                await onSignOut?.();
+              } catch {
+                setError("Não foi possível sair. Tente novamente.");
+              }
+          }}
+        >
+          {mode === "demo" ? "Entrar" : "Sair"}
+        </button>
       </header>
       <main id="main-content" tabIndex={-1}>
-        <div className="local-note">
-          <LockKeyhole size={13} />
-          <span>Seu closet, só seu. Dados salvos neste navegador.</span>
+        <div className="mode-banner">
+          <LockKeyhole size={14} />
+          <span>
+            {mode === "demo"
+              ? "Modo demonstração: peças fictícias, sem dados pessoais e sem salvamento."
+              : "Closet pessoal: peças e fotos privadas na sua conta Supabase."}
+          </span>
+          {mode === "demo" && (
+            <button onClick={onLeaveDemo}>Criar minha conta</button>
+          )}
         </div>
+        {mode === "personal" && legacyCount > 0 && (
+          <div className="legacy-banner">
+            <span>
+              Encontramos {legacyCount} peça(s) da V1 neste navegador. A
+              importação é opcional e não apaga os dados locais.
+            </span>
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={importOldCloset}
+            >
+              {busy ? "Importando…" : "Importar da V1"}
+            </button>
+          </div>
+        )}
         {error && (
           <div role="alert" className="alert error">
             {error}
@@ -350,47 +568,28 @@ export default function Closet() {
                   </div>
                   <div className="hero-art" aria-hidden="true">
                     <span className="art-circle" />
-                    <div className="hero-garment one">
-                      <Garment
-                        piece={
-                          data.pieces.find((p) => p.category === "Blusas") ?? {
-                            id: "hero1",
-                            name: "Camisa",
-                            category: "Blusas",
-                            color: "Branco",
-                            occasions: [],
-                          }
-                        }
-                      />
-                    </div>
-                    <div className="hero-garment two">
-                      <Garment
-                        piece={
-                          data.pieces.find((p) => p.category === "Calças") ?? {
-                            id: "hero2",
-                            name: "Calça",
-                            category: "Calças",
-                            color: "Bege",
-                            occasions: [],
-                          }
-                        }
-                      />
-                    </div>
-                    <div className="hero-garment three">
-                      <Garment
-                        piece={
-                          data.pieces.find(
-                            (p) => p.category === "Acessórios",
-                          ) ?? {
-                            id: "hero3",
-                            name: "Bolsa",
-                            category: "Acessórios",
-                            color: "Marrom",
-                            occasions: [],
-                          }
-                        }
-                      />
-                    </div>
+                    {data.pieces.length ? (
+                      (["Blusas", "Calças", "Acessórios"] as const).map(
+                        (category, index) => {
+                          const piece =
+                            data.pieces.find((p) => p.category === category) ??
+                            data.pieces[index];
+                          return piece ? (
+                            <div
+                              className={`hero-garment ${["one", "two", "three"][index]}`}
+                              key={category}
+                            >
+                              <Garment piece={piece} />
+                            </div>
+                          ) : null;
+                        },
+                      )
+                    ) : (
+                      <div className="hero-empty">
+                        <Shirt size={58} />
+                        <span>Seu estilo começa aqui</span>
+                      </div>
+                    )}
                     <span className="art-caption">
                       CURADORIA DO SEU DIA A DIA
                     </span>
@@ -638,7 +837,13 @@ export default function Closet() {
                       <button
                         type="button"
                         className="text-button"
-                        onClick={() => setDraft({ ...draft, image: undefined })}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            image: undefined,
+                            photoPath: undefined,
+                          })
+                        }
                       >
                         Remover foto
                       </button>
@@ -695,6 +900,18 @@ export default function Closet() {
                         </select>
                       </label>
                     </div>
+                    <label>
+                      Estilo (opcional)
+                      <input
+                        className="style-field"
+                        maxLength={80}
+                        placeholder="Ex.: minimalista, clássico"
+                        value={draft.style ?? ""}
+                        onChange={(e) =>
+                          setDraft({ ...draft, style: e.target.value })
+                        }
+                      />
+                    </label>
                     <fieldset>
                       <legend>Em quais ocasiões você usaria?</legend>
                       <div className="occasion-options">
@@ -724,9 +941,9 @@ export default function Closet() {
                     <div className="privacy-card">
                       <LockKeyhole size={18} />
                       <p>
-                        Fotos e informações ficam apenas neste navegador. Limpar
-                        os dados do site apaga seu closet. Não há sincronização
-                        ou backup na nuvem.
+                        Fotos e informações são enviadas à sua conta no
+                        Supabase. As fotos ficam em um bucket privado e são
+                        exibidas por links temporários.
                       </p>
                     </div>
                     <button
@@ -841,17 +1058,9 @@ export default function Closet() {
                             disabled={busy}
                             className="text-button"
                             aria-label="Excluir look do histórico"
-                            onClick={() =>
-                              persist(
-                                {
-                                  ...data,
-                                  looks: data.looks.filter(
-                                    (x) => x.id !== l.id,
-                                  ),
-                                },
-                                "Look excluído.",
-                              )
-                            }
+                            onClick={() => {
+                              void removeLook(l);
+                            }}
                           >
                             <Trash2 size={15} /> Excluir
                           </button>
@@ -888,7 +1097,10 @@ export default function Closet() {
         <footer className="page-footer">
           <Shirt size={16} />
           <span>Menos peças esquecidas. Mais histórias para vestir.</span>
-          <span>Meu Closet AI · Protótipo local</span>
+          <span>
+            Meu Closet AI ·{" "}
+            {mode === "demo" ? "Demonstração" : "Closet pessoal"}
+          </span>
         </footer>
       </main>
       <nav className="bottom-nav" aria-label="Navegação principal">
@@ -941,6 +1153,7 @@ export default function Closet() {
               <p>
                 {selected.category} · {selected.color}
               </p>
+              {selected.style && <p>Estilo: {selected.style}</p>}
               <div className="chips">
                 {selected.occasions.map((o) => (
                   <span className="chip" key={o}>
@@ -948,39 +1161,28 @@ export default function Closet() {
                   </span>
                 ))}
               </div>
-              <button
-                className="button full"
-                disabled={busy}
-                onClick={() => {
-                  setDraft({ ...selected });
-                  setSelected(null);
-                  setTab("add");
-                }}
-              >
-                <Pencil size={16} /> Editar peça
-              </button>
-              <button
-                className="delete-button"
-                disabled={busy}
-                onClick={async () => {
-                  if (
-                    data &&
-                    window.confirm(
-                      "Excluir esta peça? Os looks que a utilizam também serão removidos.",
-                    )
-                  ) {
-                    if (
-                      await persist(
-                        removePiece(data, selected.id),
-                        "Peça e looks relacionados excluídos.",
-                      )
-                    )
-                      setSelected(null);
-                  }
-                }}
-              >
-                <Trash2 size={16} /> Excluir peça
-              </button>
+              {mode === "personal" && (
+                <button
+                  className="button full"
+                  disabled={busy}
+                  onClick={() => {
+                    setDraft({ ...selected });
+                    setSelected(null);
+                    setTab("add");
+                  }}
+                >
+                  <Pencil size={16} /> Editar peça
+                </button>
+              )}
+              {mode === "personal" && (
+                <button
+                  className="delete-button"
+                  disabled={busy}
+                  onClick={removeSelectedPiece}
+                >
+                  <Trash2 size={16} /> Excluir peça
+                </button>
+              )}
             </div>
           </>
         )}

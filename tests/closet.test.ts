@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   demoPieces,
   generateLooks,
+  findSavedLook,
   removePiece,
   isClosetData,
   occasions,
@@ -88,5 +89,25 @@ test("validates stored schema and dangling references", () => {
         },
       ],
     }),
+  );
+});
+
+test("home suggestion recognizes its saved outfit despite different UUID", () => {
+  const saved = {
+    id: "11111111-1111-4111-8111-111111111111",
+    pieceIds: ["demo-0", "demo-1", "demo-3"],
+    occasion: "Casual" as const,
+    favorite: true,
+    createdAt: "2026-10-10",
+  };
+  const suggestion = {
+    ...saved,
+    id: "suggestion-0-demo-0-demo-1-demo-3",
+    favorite: false,
+  };
+  assert.equal(findSavedLook([saved], suggestion)?.favorite, true);
+  assert.equal(
+    findSavedLook([saved], { ...suggestion, pieceIds: ["demo-0", "demo-1"] }),
+    undefined,
   );
 });
