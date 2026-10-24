@@ -13,6 +13,7 @@ export default function Garment({ piece }: { piece: Piece }) {
         width={200}
         height={220}
         unoptimized
+        referrerPolicy="no-referrer"
       />
     );
   const fill = colors[piece.color];
