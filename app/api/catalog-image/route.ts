@@ -15,11 +15,6 @@ function reply(message: string, status: number) {
 }
 
 export async function POST(request: Request) {
-  if (!process.env.VERCEL_OIDC_TOKEN && !process.env.AI_GATEWAY_API_KEY)
-    return reply(
-      "A geração de imagens ainda não está configurada neste ambiente.",
-      503,
-    );
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (!url || !key) return reply("Supabase não configurado.", 503);

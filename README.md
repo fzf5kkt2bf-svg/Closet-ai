@@ -43,7 +43,7 @@ A geração pode alterar detalhes de tecido, cor ou marca; confira a prévia ant
 
 No projeto Supabase existente, aplique uma única vez [a migration aditiva da versão de catálogo](supabase/migrations/20261024200423_enhanced_photo.sql) pelo SQL Editor, antes de publicar o código. Ela adiciona somente `enhanced_photo_path` à tabela `clothing_items`; não altera fotos ou registros existentes. No projeto `Closet AI` conectado nesta sessão, ela já foi aplicada e registrada como `20261024200423`; não a execute novamente nesse projeto.
 
-Na Vercel, habilite o AI Gateway, ative OIDC no projeto e configure um orçamento adequado para as gerações. Depois de ativar OIDC, crie um novo deployment. No projeto `closet-ai` conectado nesta sessão, OIDC já foi habilitado e a geração real funcionou no preview. Deployments da Vercel autenticam as chamadas pelo OIDC do próprio projeto, sem chave de provedor no cliente. Para rodar a geração localmente, configure uma chave **do AI Gateway** em `AI_GATEWAY_API_KEY` apenas no `.env.local`; não use `NEXT_PUBLIC_` nessa variável. Sem credencial, o erro aparece junto ao botão e o cadastro normal continua funcionando.
+Na Vercel, habilite o AI Gateway, ative OIDC no projeto e configure um orçamento adequado para as gerações. Depois de ativar OIDC, crie um novo deployment. No projeto `closet-ai` conectado nesta sessão, OIDC já foi habilitado. O SDK aceita o token OIDC fornecido pela Vercel ao deployment ou à requisição, sem chave de provedor no cliente. Para rodar a geração localmente, configure uma chave **do AI Gateway** em `AI_GATEWAY_API_KEY` apenas no `.env.local`; não use `NEXT_PUBLIC_` nessa variável. Se a autenticação do Gateway falhar, o erro aparece junto ao botão e o cadastro normal continua funcionando.
 
 ## Testes
 
