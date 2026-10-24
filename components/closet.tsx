@@ -87,6 +87,7 @@ export default function Closet({
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
   const [candidateImage, setCandidateImage] = useState<string | null>(null);
   const [legacyCount, setLegacyCount] = useState(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -145,6 +146,7 @@ export default function Closet({
     if (next === "add") {
       setDraft(emptyPiece());
       setCandidateImage(null);
+      setAiError("");
     }
     window.scrollTo({ top: 0 });
     requestAnimationFrame(() => titleRef.current?.focus());
@@ -212,6 +214,7 @@ export default function Closet({
     ) {
       setDraft(null);
       setCandidateImage(null);
+      setAiError("");
       setTab("wardrobe");
     }
   }
@@ -223,6 +226,7 @@ export default function Closet({
     try {
       const image = await preparePhoto(file);
       setCandidateImage(null);
+      setAiError("");
       setDraft((prev) =>
         prev?.id === targetId
           ? {
@@ -246,7 +250,7 @@ export default function Closet({
     const targetId = draft.id;
     setAiBusy(true);
     setCandidateImage(null);
-    setError("");
+    setAiError("");
     setNotice("");
     try {
       const { data: sessionData, error: sessionError } =
@@ -261,17 +265,20 @@ export default function Closet({
         },
         body: JSON.stringify({ pieceId: targetId }),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => null);
       if (!response.ok)
-        throw new Error(result.error ?? "Não foi possível gerar a imagem.");
+        throw new Error(
+          result?.error ??
+            `Não foi possível gerar a imagem (HTTP ${response.status}).`,
+        );
       if (
-        typeof result.image !== "string" ||
+        typeof result?.image !== "string" ||
         !result.image.startsWith("data:image/jpeg;base64,")
       )
         throw new Error("A imagem recebida é inválida.");
       if (draftIdRef.current === targetId) setCandidateImage(result.image);
     } catch (cause) {
-      setError(
+      setAiError(
         cause instanceof Error
           ? cause.message
           : "Não foi possível gerar a imagem.",
@@ -950,6 +957,18 @@ export default function Closet({
                               A geração pode levar até dois minutos.
                             </p>
                           )}
+                          {aiError && (
+                            <p role="alert" className="alert error">
+                              {aiError}
+                            </p>
+                          )}
+                          {!candidateImage &&
+                            draft.enhancedImage?.startsWith("data:image/") && (
+                              <p role="status">
+                                Versão escolhida. Toque em “Salvar peça” para
+                                aplicá-la.
+                              </p>
+                            )}
                           {candidateImage && (
                             <div
                               className="catalog-review"
@@ -1342,6 +1361,7 @@ export default function Closet({
                   onClick={() => {
                     setDraft({ ...selected });
                     setCandidateImage(null);
+                    setAiError("");
                     setSelected(null);
                     setTab("add");
                   }}

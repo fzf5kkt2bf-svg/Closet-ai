@@ -86,7 +86,24 @@ export async function POST(request: Request) {
       { image: `data:image/jpeg;base64,${jpeg.toString("base64")}` },
       { headers: { "Cache-Control": "no-store" } },
     );
-  } catch {
+  } catch (cause) {
+    const status =
+      cause && typeof cause === "object" && "statusCode" in cause
+        ? Number(cause.statusCode)
+        : undefined;
+    console.error("catalog-image generation failed", { status });
+    if (status === 401 || status === 403)
+      return reply(
+        "O AI Gateway não autorizou a geração. Confira a configuração na Vercel.",
+        502,
+      );
+    if (status === 402)
+      return reply("O AI Gateway está sem créditos para gerar imagens.", 502);
+    if (status === 429)
+      return reply(
+        "O limite de gerações foi atingido. Tente novamente mais tarde.",
+        429,
+      );
     return reply(
       "A geração falhou. Sua foto original foi preservada; tente novamente mais tarde.",
       502,

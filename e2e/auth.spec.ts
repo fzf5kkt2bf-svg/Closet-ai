@@ -28,15 +28,20 @@ test("email signup, login and personal closet using simulated Supabase", async (
   const sampleImage = await readFile("public/icon-192.png");
   const catalogImage = await sharp(sampleImage).jpeg().toBuffer();
   let generationCalls = 0;
+  let generationError = true;
   await page.route("**/api/catalog-image", async (route) => {
     expect(route.request().headers().authorization).toMatch(/^Bearer /);
     generationCalls++;
     await route.fulfill({
-      status: 200,
+      status: generationError ? 503 : 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        image: `data:image/jpeg;base64,${catalogImage.toString("base64")}`,
-      }),
+      body: JSON.stringify(
+        generationError
+          ? { error: "AI Gateway indisponível para este teste." }
+          : {
+              image: `data:image/jpeg;base64,${catalogImage.toString("base64")}`,
+            },
+      ),
     });
   });
   await page.route("http://127.0.0.1:3999/**", async (route) => {
@@ -178,6 +183,11 @@ test("email signup, login and personal closet using simulated Supabase", async (
   await page.locator(".piece-card").click();
   await page.getByRole("button", { name: "Editar peça" }).click();
   await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
+  await expect(page.locator(".catalog-editor [role=alert]")).toContainText(
+    "AI Gateway indisponível",
+  );
+  generationError = false;
+  await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
   await expect(
     page.getByRole("group", { name: "Comparar foto original e versão gerada" }),
   ).toBeVisible();
@@ -189,7 +199,7 @@ test("email signup, login and personal closet using simulated Supabase", async (
   await page.getByRole("button", { name: "Usar esta versão" }).click();
   await page.getByRole("button", { name: "Salvar peça" }).click();
   await expect(page.locator(".piece-card")).toHaveCount(1);
-  expect(generationCalls).toBe(2);
+  expect(generationCalls).toBe(3);
   expect(uploadedPaths).toHaveLength(2);
   await page.locator(".piece-card").click();
   page.once("dialog", (dialog) => dialog.accept());
