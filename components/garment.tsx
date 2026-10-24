@@ -3,11 +3,12 @@ import { useId } from "react";
 import { colors, type Piece } from "@/lib/closet";
 export default function Garment({ piece }: { piece: Piece }) {
   const illustrationId = useId().replace(/:/g, "");
-  // Uploaded images remain local; SVG illustrations below are original artwork.
-  if (piece.image)
+  // Photos are private signed URLs or local previews; prefer an approved edit.
+  const image = piece.enhancedImage ?? piece.image;
+  if (image)
     return (
       <Image
-        src={piece.image}
+        src={image}
         alt={piece.name}
         className="garment-photo"
         width={200}

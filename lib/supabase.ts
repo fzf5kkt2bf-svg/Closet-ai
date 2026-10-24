@@ -38,6 +38,7 @@ type ItemRow = {
   style: string;
   occasions: string[];
   photo_path: string | null;
+  enhanced_photo_path: string | null;
 };
 type OutfitRow = {
   id: string;
@@ -46,7 +47,7 @@ type OutfitRow = {
   created_at: string;
   outfit_items: { clothing_item_id: string; position: number }[];
 };
-function fromItem(row: ItemRow, image?: string): Piece {
+function fromItem(row: ItemRow, image?: string, enhancedImage?: string): Piece {
   if (
     !categories.includes(row.category as Piece["category"]) ||
     !Object.hasOwn(colors, row.color) ||
@@ -62,6 +63,8 @@ function fromItem(row: ItemRow, image?: string): Piece {
     occasions: row.occasions as Occasion[],
     photoPath: row.photo_path ?? undefined,
     image,
+    enhancedPhotoPath: row.enhanced_photo_path ?? undefined,
+    enhancedImage,
   };
 }
 function fromOutfit(row: OutfitRow): Look {
@@ -82,7 +85,9 @@ export async function loadCloset(
   const [itemsResult, outfitsResult] = await Promise.all([
     api
       .from("clothing_items")
-      .select("id,user_id,name,category,color,style,occasions,photo_path")
+      .select(
+        "id,user_id,name,category,color,style,occasions,photo_path,enhanced_photo_path",
+      )
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
     api
@@ -96,17 +101,25 @@ export async function loadCloset(
   if (itemsResult.error) throw itemsResult.error;
   if (outfitsResult.error) throw outfitsResult.error;
   const rows = itemsResult.data as ItemRow[];
+  const signedImage = async (path: string | null) => {
+    if (!path) return undefined;
+    const { data, error } = await api.storage
+      .from(PHOTO_BUCKET)
+      .createSignedUrl(path, 600);
+    if (error) return undefined;
+    return data.signedUrl;
+  };
   const images = await Promise.all(
-    rows.map(async (row) => {
-      if (!row.photo_path) return undefined;
-      const { data, error } = await api.storage
-        .from(PHOTO_BUCKET)
-        .createSignedUrl(row.photo_path, 600);
-      if (error) return undefined;
-      return data.signedUrl;
-    }),
+    rows.map(async (row) =>
+      Promise.all([
+        signedImage(row.photo_path),
+        signedImage(row.enhanced_photo_path),
+      ]),
+    ),
   );
-  const pieces = rows.map((row, i) => fromItem(row, images[i]));
+  const pieces = rows.map((row, i) =>
+    fromItem(row, images[i][0], images[i][1]),
+  );
   const ids = new Set(pieces.map((p) => p.id));
   const looks = (outfitsResult.data as OutfitRow[])
     .map(fromOutfit)
@@ -130,21 +143,33 @@ export async function savePiece(
   original?: Piece,
   api: SupabaseClient = getSupabase(),
 ): Promise<MutationResult> {
-  let uploadedPath: string | undefined;
+  const uploadedPaths: string[] = [];
   let photoPath = piece.photoPath ?? null;
-  if (piece.image?.startsWith("data:image/")) {
-    uploadedPath = `${userId}/${piece.id}/${crypto.randomUUID()}.jpg`;
-    const blob = await (await fetch(piece.image)).blob();
-    const { error } = await api.storage
-      .from(PHOTO_BUCKET)
-      .upload(uploadedPath, blob, {
-        contentType: "image/jpeg",
-        upsert: false,
-        cacheControl: "0",
-      });
+  let enhancedPhotoPath = piece.enhancedPhotoPath ?? null;
+  const upload = async (dataUrl: string): Promise<string> => {
+    const path = `${userId}/${piece.id}/${crypto.randomUUID()}.jpg`;
+    const blob = await (await fetch(dataUrl)).blob();
+    uploadedPaths.push(path);
+    const { error } = await api.storage.from(PHOTO_BUCKET).upload(path, blob, {
+      contentType: "image/jpeg",
+      upsert: false,
+      cacheControl: "0",
+    });
     if (error) throw error;
-    photoPath = uploadedPath;
-  } else if (!piece.image && !piece.photoPath) photoPath = null;
+    return path;
+  };
+  try {
+    if (piece.image?.startsWith("data:image/"))
+      photoPath = await upload(piece.image);
+    else if (!piece.image && !piece.photoPath) photoPath = null;
+    if (photoPath && piece.enhancedImage?.startsWith("data:image/"))
+      enhancedPhotoPath = await upload(piece.enhancedImage);
+    else if (!photoPath || (!piece.enhancedImage && !piece.enhancedPhotoPath))
+      enhancedPhotoPath = null;
+  } catch (cause) {
+    for (const path of uploadedPaths) await removePhoto(path, api);
+    throw cause;
+  }
   const payload = {
     id: piece.id,
     user_id: userId,
@@ -154,29 +179,47 @@ export async function savePiece(
     style: (piece.style ?? "").trim(),
     occasions: piece.occasions,
     photo_path: photoPath,
+    enhanced_photo_path: enhancedPhotoPath,
   };
-  const result = original
-    ? await api
-        .from("clothing_items")
-        .update(payload)
-        .eq("id", piece.id)
-        .eq("user_id", userId)
-        .select("id")
-        .single()
-    : await api.from("clothing_items").insert(payload).select("id").single();
+  let result;
+  try {
+    result = original
+      ? await api
+          .from("clothing_items")
+          .update(payload)
+          .eq("id", piece.id)
+          .eq("user_id", userId)
+          .select("id")
+          .single()
+      : await api.from("clothing_items").insert(payload).select("id").single();
+  } catch (cause) {
+    const cleaned = await Promise.all(
+      uploadedPaths.map((path) => removePhoto(path, api)),
+    );
+    if (cleaned.some((ok) => !ok))
+      throw new Error(
+        "Peça não salva. O novo arquivo pode precisar de limpeza no Storage.",
+      );
+    throw cause;
+  }
   if (result.error) {
-    if (uploadedPath && !(await removePhoto(uploadedPath, api)))
+    const cleaned = await Promise.all(
+      uploadedPaths.map((path) => removePhoto(path, api)),
+    );
+    if (cleaned.some((ok) => !ok))
       throw new Error(
         "Peça não salva. O novo arquivo pode precisar de limpeza no Storage.",
       );
     throw result.error;
   }
+  const oldPaths = [original?.photoPath, original?.enhancedPhotoPath]
+    .filter((path): path is string => Boolean(path))
+    .filter((path) => path !== photoPath && path !== enhancedPhotoPath);
+  const removed = await Promise.all(
+    [...new Set(oldPaths)].map((path) => removePhoto(path, api)),
+  );
   return {
-    cleanupWarning: Boolean(
-      original?.photoPath &&
-      original.photoPath !== photoPath &&
-      !(await removePhoto(original.photoPath, api)),
-    ),
+    cleanupWarning: removed.some((ok) => !ok),
   };
 }
 export async function deletePiece(
@@ -192,11 +235,17 @@ export async function deletePiece(
     .select("id")
     .single();
   if (error || !data) throw error ?? new Error("Peça não encontrada.");
-  return {
-    cleanupWarning: Boolean(
-      piece.photoPath && !(await removePhoto(piece.photoPath, api)),
+  const paths = [
+    ...new Set(
+      [piece.photoPath, piece.enhancedPhotoPath].filter(
+        (path): path is string => Boolean(path),
+      ),
     ),
-  };
+  ];
+  const removed = await Promise.all(
+    paths.map((path) => removePhoto(path, api)),
+  );
+  return { cleanupWarning: removed.some((ok) => !ok) };
 }
 export async function saveLook(
   look: Look,

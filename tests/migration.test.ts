@@ -32,6 +32,15 @@ test("migration creates private schema and RLS separates two users", async () =>
         "utf8",
       ),
     );
+    await db.exec(
+      await readFile(
+        new URL(
+          "../supabase/migrations/20261024200423_enhanced_photo.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
     const bucket = await db.query<{ public: boolean }>(
       "select public from storage.buckets where id='clothing-photos-private'",
     );
@@ -53,6 +62,19 @@ test("migration creates private schema and RLS separates two users", async () =>
     assert.deepEqual(profiles.rows, [{ id: A }]);
     await db.exec(
       `insert into public.clothing_items(user_id,name,category,color,occasions) values ('${A}','Camisa','Blusas','Branco',array['Casual']);`,
+    );
+    await assert.rejects(() =>
+      db.exec(
+        `update public.clothing_items set enhanced_photo_path='${A}/piece/edited.jpg' where user_id='${A}';`,
+      ),
+    );
+    await db.exec(
+      `update public.clothing_items set photo_path='${A}/piece/original.jpg', enhanced_photo_path='${A}/piece/edited.jpg' where user_id='${A}';`,
+    );
+    await assert.rejects(() =>
+      db.exec(
+        `update public.clothing_items set enhanced_photo_path='${B}/piece/edited.jpg' where user_id='${A}';`,
+      ),
     );
     await assert.rejects(() =>
       db.exec(

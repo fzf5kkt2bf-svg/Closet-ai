@@ -28,6 +28,8 @@ export type Piece = {
   style?: string;
   photoPath?: string;
   image?: string;
+  enhancedPhotoPath?: string;
+  enhancedImage?: string;
   demo?: boolean;
 };
 export type Look = {
