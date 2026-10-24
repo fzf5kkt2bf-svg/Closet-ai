@@ -82,14 +82,30 @@ export async function POST(request: Request) {
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (cause) {
-    const status =
-      cause && typeof cause === "object" && "statusCode" in cause
-        ? Number(cause.statusCode)
-        : undefined;
-    console.error("catalog-image generation failed", { status });
-    if (status === 401 || status === 403)
+    const details =
+      cause && typeof cause === "object"
+        ? (cause as {
+            statusCode?: number;
+            name?: string;
+            type?: string;
+            ruleId?: string;
+          })
+        : {};
+    const status = details.statusCode;
+    console.error("catalog-image generation failed", {
+      status,
+      name: details.name,
+      type: details.type,
+      ruleId: details.ruleId,
+    });
+    if (status === 401)
       return reply(
         "O AI Gateway não autorizou a geração. Confira a configuração na Vercel.",
+        502,
+      );
+    if (status === 403)
+      return reply(
+        "O AI Gateway recusou este modelo. Confira o acesso da equipe e as regras de modelos na Vercel.",
         502,
       );
     if (status === 402)
