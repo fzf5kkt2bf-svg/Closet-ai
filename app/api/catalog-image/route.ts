@@ -105,7 +105,7 @@ export async function POST(request: Request) {
       );
     if (status === 403)
       return reply(
-        "O AI Gateway recusou este modelo. Confira o acesso da equipe e as regras de modelos na Vercel.",
+        "O AI Gateway bloqueou o acesso desta equipe (403). Confira a ativação e os créditos no painel da Vercel.",
         502,
       );
     if (status === 402)

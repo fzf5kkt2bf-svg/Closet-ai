@@ -45,6 +45,8 @@ No projeto Supabase existente, aplique uma única vez [a migration aditiva da ve
 
 Na Vercel, habilite o AI Gateway, ative OIDC no projeto e configure um orçamento adequado para as gerações. Depois de ativar OIDC, crie um novo deployment. No projeto `closet-ai` conectado nesta sessão, OIDC já foi habilitado. O SDK aceita o token OIDC fornecido pela Vercel ao deployment ou à requisição, sem chave de provedor no cliente. Para rodar a geração localmente, configure uma chave **do AI Gateway** em `AI_GATEWAY_API_KEY` apenas no `.env.local`; não use `NEXT_PUBLIC_` nessa variável. Se a autenticação do Gateway falhar, o erro aparece junto ao botão e o cadastro normal continua funcionando.
 
+Se o Gateway devolver `403` mesmo com OIDC ativo, confira **AI Gateway → créditos e acesso da equipe** no painel Vercel. Um `GatewayInternalServerError` com `403` e sem `ruleId` indica que a requisição chegou ao Gateway, mas não aponta para uma regra de bloqueio de modelo. Caso o painel mostre acesso e créditos disponíveis, abra um chamado com o suporte da Vercel informando o ID da equipe e o horário/request ID do log, sem anexar fotos ou credenciais.
+
 ## Testes
 
 ```sh
