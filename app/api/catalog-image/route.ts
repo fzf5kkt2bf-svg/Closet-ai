@@ -79,7 +79,8 @@ export async function POST(request: Request) {
       .flatten({ background: "#f8f7f3" })
       .jpeg({ quality: 84, mozjpeg: true })
       .toBuffer();
-    if (jpeg.length > 6 * 1024 * 1024)
+    // JSON/base64 adds ~33%; stay below the Vercel response size limit.
+    if (jpeg.length > 3 * 1024 * 1024)
       return reply("A imagem gerada ficou grande demais.", 502);
     return Response.json(
       { image: `data:image/jpeg;base64,${jpeg.toString("base64")}` },
