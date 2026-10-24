@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
+const C = "33333333-3333-4333-8333-333333333333";
 
 test("migration creates private schema and RLS separates two users", async () => {
   const db = new PGlite();
@@ -25,7 +26,7 @@ test("migration creates private schema and RLS separates two users", async () =>
     await db.exec(
       await readFile(
         new URL(
-          "../supabase/migrations/20261010000000_initial.sql",
+          "../supabase/migrations/20261024192021_initial_meu_closet_ai_v2.sql",
           import.meta.url,
         ),
         "utf8",
@@ -38,6 +39,13 @@ test("migration creates private schema and RLS separates two users", async () =>
     await db.exec(
       `insert into auth.users(id,raw_user_meta_data) values ('${A}','{"display_name":"Pessoa A"}'),('${B}','{}');`,
     );
+    await db.exec(
+      `insert into auth.users(id,raw_user_meta_data) values ('${C}','{"display_name":"${"A".repeat(81)}"}');`,
+    );
+    const longName = await db.query<{ display_name: string }>(
+      `select display_name from public.profiles where id='${C}'`,
+    );
+    assert.equal(longName.rows[0].display_name.length, 80);
     await db.exec(
       `set role authenticated; set request.jwt.claim.sub = '${A}';`,
     );
@@ -121,7 +129,7 @@ test("migration stops on existing table names without changing their data", asyn
     );
     const sql = await readFile(
       new URL(
-        "../supabase/migrations/20261010000000_initial.sql",
+        "../supabase/migrations/20261024192021_initial_meu_closet_ai_v2.sql",
         import.meta.url,
       ),
       "utf8",
