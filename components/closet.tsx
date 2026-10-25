@@ -41,6 +41,7 @@ import {
   updateFavorite,
   deleteLook,
   importLegacyCloset,
+  getSupabase,
 } from "@/lib/supabase";
 import Garment from "./garment";
 type Tab = "home" | "wardrobe" | "add" | "generate" | "looks";
@@ -85,10 +86,17 @@ export default function Closet({
   const [generated, setGenerated] = useState<Look[]>([]);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [candidateImage, setCandidateImage] = useState<string | null>(null);
   const [legacyCount, setLegacyCount] = useState(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mutationLock = useRef(false);
+  const draftIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    draftIdRef.current = draft?.id ?? null;
+  }, [draft]);
   useEffect(() => {
     if (mode === "demo") return;
     if (!userId) return;
@@ -135,7 +143,11 @@ export default function Closet({
       );
       return;
     }
-    if (next === "add") setDraft(emptyPiece());
+    if (next === "add") {
+      setDraft(emptyPiece());
+      setCandidateImage(null);
+      setAiError("");
+    }
     window.scrollTo({ top: 0 });
     requestAnimationFrame(() => titleRef.current?.focus());
   }
@@ -201,6 +213,8 @@ export default function Closet({
       )
     ) {
       setDraft(null);
+      setCandidateImage(null);
+      setAiError("");
       setTab("wardrobe");
     }
   }
@@ -211,13 +225,66 @@ export default function Closet({
     setError("");
     try {
       const image = await preparePhoto(file);
-      setDraft((prev) => (prev?.id === targetId ? { ...prev, image } : prev));
+      setCandidateImage(null);
+      setAiError("");
+      setDraft((prev) =>
+        prev?.id === targetId
+          ? {
+              ...prev,
+              image,
+              enhancedImage: undefined,
+              enhancedPhotoPath: undefined,
+            }
+          : prev,
+      );
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Não foi possível carregar a foto.",
       );
     } finally {
       setPhotoBusy(false);
+    }
+  }
+  async function generateCatalogImage() {
+    if (!draft?.photoPath || mode !== "personal" || aiBusy || busy) return;
+    const targetId = draft.id;
+    setAiBusy(true);
+    setCandidateImage(null);
+    setAiError("");
+    setNotice("");
+    try {
+      const { data: sessionData, error: sessionError } =
+        await getSupabase().auth.getSession();
+      if (sessionError || !sessionData.session?.access_token)
+        throw new Error("Sua sessão expirou. Entre novamente.");
+      const response = await fetch("/api/catalog-image", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${sessionData.session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ pieceId: targetId }),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok)
+        throw new Error(
+          result?.error ??
+            `Não foi possível gerar a imagem (HTTP ${response.status}).`,
+        );
+      if (
+        typeof result?.image !== "string" ||
+        !result.image.startsWith("data:image/jpeg;base64,")
+      )
+        throw new Error("A imagem recebida é inválida.");
+      if (draftIdRef.current === targetId) setCandidateImage(result.image);
+    } catch (cause) {
+      setAiError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível gerar a imagem.",
+      );
+    } finally {
+      setAiBusy(false);
     }
   }
   async function generate() {
@@ -842,6 +909,8 @@ export default function Closet({
                             ...draft,
                             image: undefined,
                             photoPath: undefined,
+                            enhancedImage: undefined,
+                            enhancedPhotoPath: undefined,
                           })
                         }
                       >
@@ -852,6 +921,129 @@ export default function Closet({
                       Foto opcional · até 20 MB. Sem foto, usamos uma
                       ilustração.
                     </p>
+                    {draft.image?.startsWith("data:image/") && (
+                      <p className="hint">
+                        Salve esta foto antes de gerar a versão de catálogo.
+                      </p>
+                    )}
+                    {draft.photoPath &&
+                      !draft.image?.startsWith("data:image/") &&
+                      mode === "personal" && (
+                        <div className="catalog-editor">
+                          <span className="eyebrow">ESTÚDIO IA</span>
+                          <h3>Versão de catálogo</h3>
+                          <p>
+                            Gere uma apresentação em fundo claro e confira os
+                            detalhes antes de usar. Cada geração pode ter custo.
+                            A foto original fica guardada.
+                          </p>
+                          <button
+                            type="button"
+                            className="button secondary"
+                            disabled={aiBusy || busy || photoBusy}
+                            onClick={() => void generateCatalogImage()}
+                          >
+                            {aiBusy ? (
+                              <LoaderCircle size={16} className="spinner" />
+                            ) : (
+                              <Sparkles size={16} />
+                            )}
+                            {aiBusy
+                              ? "Gerando imagem…"
+                              : "Gerar versão de catálogo"}
+                          </button>
+                          {aiBusy && (
+                            <p role="status">
+                              A geração pode levar até dois minutos.
+                            </p>
+                          )}
+                          {aiError && (
+                            <p role="alert" className="alert error">
+                              {aiError}
+                            </p>
+                          )}
+                          {!candidateImage &&
+                            draft.enhancedImage?.startsWith("data:image/") && (
+                              <p role="status">
+                                Versão escolhida. Toque em “Salvar peça” para
+                                aplicá-la.
+                              </p>
+                            )}
+                          {candidateImage && (
+                            <div
+                              className="catalog-review"
+                              role="group"
+                              aria-label="Comparar foto original e versão gerada"
+                            >
+                              <figure>
+                                <div className="catalog-review-art">
+                                  <Garment
+                                    piece={{
+                                      ...draft,
+                                      enhancedImage: undefined,
+                                    }}
+                                  />
+                                </div>
+                                <figcaption>Original</figcaption>
+                              </figure>
+                              <figure>
+                                <div className="catalog-review-art">
+                                  <Garment
+                                    piece={{
+                                      ...draft,
+                                      enhancedImage: candidateImage,
+                                    }}
+                                  />
+                                </div>
+                                <figcaption>Gerada por IA</figcaption>
+                              </figure>
+                              <div className="catalog-review-actions">
+                                <button
+                                  type="button"
+                                  className="button"
+                                  onClick={() => {
+                                    setDraft({
+                                      ...draft,
+                                      enhancedImage: candidateImage,
+                                      enhancedPhotoPath: undefined,
+                                    });
+                                    setCandidateImage(null);
+                                    setNotice(
+                                      "Versão escolhida. Salve a peça para aplicá-la ao guarda-roupa.",
+                                    );
+                                  }}
+                                >
+                                  Usar esta versão
+                                </button>
+                                <button
+                                  type="button"
+                                  className="button secondary"
+                                  onClick={() => setCandidateImage(null)}
+                                >
+                                  Descartar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {!candidateImage &&
+                            (draft.enhancedImage ||
+                              draft.enhancedPhotoPath) && (
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() =>
+                                  setDraft({
+                                    ...draft,
+                                    enhancedImage: undefined,
+                                    enhancedPhotoPath: undefined,
+                                  })
+                                }
+                              >
+                                Voltar a exibir a foto original
+                              </button>
+                            )}
+                        </div>
+                      )}
                   </div>
                   <div className="form-fields">
                     <label>
@@ -951,6 +1143,7 @@ export default function Closet({
                       disabled={
                         busy ||
                         photoBusy ||
+                        aiBusy ||
                         !draft.occasions.length ||
                         !draft.name.trim()
                       }
@@ -1167,6 +1360,8 @@ export default function Closet({
                   disabled={busy}
                   onClick={() => {
                     setDraft({ ...selected });
+                    setCandidateImage(null);
+                    setAiError("");
                     setSelected(null);
                     setTab("add");
                   }}

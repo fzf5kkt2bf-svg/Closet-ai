@@ -35,6 +35,18 @@ A câmera e a galeria usam seletores de arquivo do iPhone. Imagens de até 20 MB
 
 Ao substituir uma foto, o aplicativo envia a nova, grava o novo caminho na peça e só então remove a antiga. Se a gravação falhar, tenta remover o arquivo recém-enviado. Ao excluir uma peça, exclui primeiro o registro e seus looks relacionados, depois remove a foto. Se a limpeza do Storage falhar, um aviso indica o possível arquivo órfão; a operação de banco já concluída não é revertida. Links das fotos são temporários. Fotos pessoais não são armazenadas no IndexedDB da V2 e não há imagens externas de demonstração.
 
+## Versão de catálogo com IA
+
+Depois de salvar uma peça com foto, abra **Editar peça → Gerar versão de catálogo**. O app envia a foto original privada ao servidor, que confirma a sessão e a propriedade da peça, baixa o arquivo com as políticas RLS e pede uma edição ao modelo `openai/gpt-image-1-mini` pelo Vercel AI Gateway. Esse modelo é elegível ao crédito gratuito do AI Gateway, sujeito aos limites da Vercel, e pode produzir menos detalhes que modelos maiores. A prévia gerada volta ao navegador sem ser salva. Compare **Original / Gerada por IA** e escolha **Usar esta versão** ou **Descartar**. Apenas **Salvar peça** grava a versão aceita em outro arquivo JPEG no bucket privado. A original permanece disponível; é possível voltar a exibi-la. Trocar ou excluir a foto limpa os arquivos antigos quando o banco confirma a alteração.
+
+A geração pode alterar detalhes de tecido, cor ou marca; confira a prévia antes de aprovar. Uma geração consome créditos do AI Gateway, mesmo quando descartada. As fotos são enviadas ao provedor do modelo para processamento. Consulte as opções de privacidade e cobrança do AI Gateway antes de usar fotos sensíveis. A função é exclusiva do closet pessoal; o modo demonstração não envia imagens.
+
+No projeto Supabase existente, aplique uma única vez [a migration aditiva da versão de catálogo](supabase/migrations/20261024200423_enhanced_photo.sql) pelo SQL Editor, antes de publicar o código. Ela adiciona somente `enhanced_photo_path` à tabela `clothing_items`; não altera fotos ou registros existentes. No projeto `Closet AI` conectado nesta sessão, ela já foi aplicada e registrada como `20261024200423`; não a execute novamente nesse projeto.
+
+Na Vercel, habilite o AI Gateway, ative OIDC no projeto e configure um orçamento adequado para as gerações. Depois de ativar OIDC, crie um novo deployment. No projeto `closet-ai` conectado nesta sessão, OIDC já foi habilitado. O SDK aceita o token OIDC fornecido pela Vercel ao deployment ou à requisição, sem chave de provedor no cliente. Para rodar a geração localmente, configure uma chave **do AI Gateway** em `AI_GATEWAY_API_KEY` apenas no `.env.local`; não use `NEXT_PUBLIC_` nessa variável. Se a autenticação do Gateway falhar, o erro aparece junto ao botão e o cadastro normal continua funcionando.
+
+Se o Gateway devolver `403` mesmo com OIDC ativo, confira **AI Gateway → créditos e acesso da equipe** no painel Vercel. Um `GatewayInternalServerError` com `403` e sem `ruleId` indica que a requisição chegou ao Gateway, mas não aponta para uma regra de bloqueio de modelo. Caso o painel mostre acesso e créditos disponíveis, abra um chamado com o suporte da Vercel informando o ID da equipe e o horário/request ID do log, sem anexar fotos ou credenciais.
+
 ## Testes
 
 ```sh
@@ -46,7 +58,7 @@ npm run test:e2e
 npm run test:e2e:auth
 ```
 
-Os testes de interface usam Chromium em viewport de iPhone e rodam sem acesso ao seu projeto Supabase. O teste `test:e2e:auth` simula a API para verificar cadastro, login, recuperação, peça com foto, edição e exclusão. Os testes de banco executam a migration em PostgreSQL local (PGlite) e verificam RLS entre dois usuários. Por padrão usa `/usr/bin/chromium` se disponível; em outro ambiente, execute `npx playwright install chromium` ou defina `PLAYWRIGHT_CHROMIUM_PATH`. Testes locais não substituem a validação manual da câmera, galeria, links de e-mail, área segura e instalação em um iPhone físico com Safari.
+Os testes de interface usam Chromium em viewport de iPhone e rodam sem acesso ao seu projeto Supabase. O teste `test:e2e:auth` simula a API para verificar cadastro, login, recuperação, fotos, comparação e aprovação da imagem gerada, edição e exclusão. Os testes de banco executam as migrations em PostgreSQL local (PGlite) e verificam RLS entre dois usuários. Por padrão usa `/usr/bin/chromium` se disponível; em outro ambiente, execute `npx playwright install chromium` ou defina `PLAYWRIGHT_CHROMIUM_PATH`. Testes locais não substituem a validação manual da câmera, galeria, links de e-mail, geração real, área segura e instalação em um iPhone físico com Safari.
 
 ## Publicar na Vercel
 
@@ -59,4 +71,4 @@ Manifesto, ícones, metadados iOS e service worker permitem instalar o site na T
 
 ## Escopo
 
-A V2 oferece autenticação por e-mail, recuperação de senha, dados por usuário e Storage privado. A geração de looks segue regras determinísticas locais sobre as peças carregadas da conta. Ainda não há análise de moda por IA, compartilhamento entre contas ou acesso offline aos dados pessoais.
+A V2 oferece autenticação por e-mail, recuperação de senha, dados por usuário e Storage privado. A geração de looks segue regras determinísticas locais sobre as peças carregadas da conta. A versão de catálogo usa IA apenas para apresentar fotos individuais após aprovação. Ainda não há análise de moda por IA, compartilhamento entre contas ou acesso offline aos dados pessoais.

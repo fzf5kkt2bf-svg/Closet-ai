@@ -1331,3 +1331,59 @@ legend {
 .hero-empty svg {
   opacity: 0.5;
 }
+.catalog-editor {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f7f8f4;
+}
+.catalog-editor h3 {
+  margin: 8px 0;
+  font-family: Georgia, serif;
+  font-size: 20px;
+  font-weight: 400;
+}
+.catalog-editor p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+.catalog-review {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+.catalog-review figure {
+  margin: 0;
+  min-width: 0;
+}
+.catalog-review-art {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  background: #f3f1ed;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.catalog-review-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.catalog-review figcaption {
+  padding: 7px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.catalog-review-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.catalog-review-actions .button {
+  flex: 1;
+}

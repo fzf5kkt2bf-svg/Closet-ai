@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import sharp from "sharp";
 const userId = "11111111-1111-4111-8111-111111111111";
 const email = "pessoa@example.test";
 function token() {
@@ -22,8 +23,27 @@ test("email signup, login and personal closet using simulated Supabase", async (
   };
   let row: Record<string, unknown> | null = null;
   let uploadedPath = "";
-  let removedPath = "";
+  const removedPaths: string[] = [];
+  const uploadedPaths: string[] = [];
   const sampleImage = await readFile("public/icon-192.png");
+  const catalogImage = await sharp(sampleImage).jpeg().toBuffer();
+  let generationCalls = 0;
+  let generationError = true;
+  await page.route("**/api/catalog-image", async (route) => {
+    expect(route.request().headers().authorization).toMatch(/^Bearer /);
+    generationCalls++;
+    await route.fulfill({
+      status: generationError ? 503 : 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        generationError
+          ? { error: "AI Gateway indisponível para este teste." }
+          : {
+              image: `data:image/jpeg;base64,${catalogImage.toString("base64")}`,
+            },
+      ),
+    });
+  });
   await page.route("http://127.0.0.1:3999/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url()),
@@ -86,14 +106,16 @@ test("email signup, login and personal closet using simulated Supabase", async (
       uploadedPath = decodeURIComponent(
         path.split("/clothing-photos-private/")[1],
       );
+      uploadedPaths.push(uploadedPath);
       return respond({ Key: uploadedPath });
     }
     if (
       path === "/storage/v1/object/clothing-photos-private" &&
       request.method() === "DELETE"
     ) {
-      removedPath = (request.postDataJSON() as { prefixes: string[] })
-        .prefixes[0];
+      removedPaths.push(
+        (request.postDataJSON() as { prefixes: string[] }).prefixes[0],
+      );
       return respond([]);
     }
     if (path === "/rest/v1/clothing_items" && request.method() === "GET")
@@ -159,10 +181,32 @@ test("email signup, login and personal closet using simulated Supabase", async (
   await page.getByRole("button", { name: "Salvar peça" }).click();
   await expect(page.locator(".piece-card")).toContainText("Blusa editada");
   await page.locator(".piece-card").click();
+  await page.getByRole("button", { name: "Editar peça" }).click();
+  await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
+  await expect(page.locator(".catalog-editor [role=alert]")).toContainText(
+    "AI Gateway indisponível",
+  );
+  generationError = false;
+  await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
+  await expect(
+    page.getByRole("group", { name: "Comparar foto original e versão gerada" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Descartar" }).click();
+  await expect(
+    page.getByRole("group", { name: "Comparar foto original e versão gerada" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
+  await page.getByRole("button", { name: "Usar esta versão" }).click();
+  await page.getByRole("button", { name: "Salvar peça" }).click();
+  await expect(page.locator(".piece-card")).toHaveCount(1);
+  expect(generationCalls).toBe(3);
+  expect(uploadedPaths).toHaveLength(2);
+  await page.locator(".piece-card").click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Excluir peça" }).click();
   await expect(page.locator(".piece-card")).toHaveCount(0);
-  expect(removedPath).toBe(uploadedPath);
+  expect(removedPaths).toContain(uploadedPaths[0]);
+  expect(removedPaths).toContain(uploadedPaths[1]);
   await page.getByRole("button", { name: "Sair" }).click();
   await expect(
     page.getByRole("heading", { name: /Bem-vinda ao seu closet/ }),

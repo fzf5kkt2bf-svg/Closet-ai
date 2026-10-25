@@ -102,6 +102,32 @@ test("failed row update removes only the new upload", async () => {
   assert.match(events[2], /^remove:/);
   assert.notEqual(events[2], `remove:${owner}/old.jpg`);
 });
+test("approved catalog image uploads separately and preserves the original", async () => {
+  const { api, events } = fakeClient();
+  const approved: Piece = {
+    ...piece,
+    image: "https://private.example/photo.jpg",
+    enhancedImage: "data:image/jpeg;base64,/9j/2Q==",
+  };
+  const result = await savePiece(approved, owner, piece, api);
+  assert.equal(result.cleanupWarning, false);
+  assert.match(events[0], /^upload:/);
+  assert.equal(events[1], "update:clothing_items");
+  assert.equal(events.length, 2);
+});
+test("failed approval removes only the generated upload", async () => {
+  const { api, events } = fakeClient({ rowError: true });
+  const approved: Piece = {
+    ...piece,
+    image: "https://private.example/photo.jpg",
+    enhancedImage: "data:image/jpeg;base64,/9j/2Q==",
+  };
+  await assert.rejects(() => savePiece(approved, owner, piece, api));
+  assert.match(events[0], /^upload:/);
+  assert.equal(events[1], "update:clothing_items");
+  assert.match(events[2], /^remove:/);
+  assert.notEqual(events[2], `remove:${owner}/old.jpg`);
+});
 test("failed row deletion keeps the photo", async () => {
   const { api, events } = fakeClient({ rowError: true });
   await assert.rejects(() => deletePiece(piece, owner, api));
