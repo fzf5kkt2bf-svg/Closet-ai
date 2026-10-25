@@ -41,6 +41,15 @@ test("migration creates private schema and RLS separates two users", async () =>
         "utf8",
       ),
     );
+    await db.exec(
+      await readFile(
+        new URL(
+          "../supabase/migrations/20261025185725_mannequin_profile.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
     const bucket = await db.query<{ public: boolean }>(
       "select public from storage.buckets where id='clothing-photos-private'",
     );
@@ -60,6 +69,28 @@ test("migration creates private schema and RLS separates two users", async () =>
     );
     const profiles = await db.query("select id from public.profiles");
     assert.deepEqual(profiles.rows, [{ id: A }]);
+    await db.exec(
+      `update public.profiles set mannequin_photo_path='${A}/mannequin/photo.jpg', mannequin_source='photo' where id='${A}';`,
+    );
+    await assert.rejects(() =>
+      db.exec(
+        `update public.profiles set mannequin_photo_path='${B}/mannequin/photo.jpg' where id='${A}';`,
+      ),
+    );
+    await assert.rejects(() =>
+      db.exec(
+        `update public.profiles set mannequin_source=null where id='${A}';`,
+      ),
+    );
+    await db.exec(
+      `reset role; update public.profiles set mannequin_photo_path='${B}/mannequin/photo.jpg', mannequin_source='photo' where id='${B}'; set role authenticated; set request.jwt.claim.sub = '${A}';`,
+    );
+    const privateMannequin = await db.query(
+      "select mannequin_photo_path from public.profiles",
+    );
+    assert.deepEqual(privateMannequin.rows, [
+      { mannequin_photo_path: `${A}/mannequin/photo.jpg` },
+    ]);
     await db.exec(
       `insert into public.clothing_items(user_id,name,category,color,occasions) values ('${A}','Camisa','Blusas','Branco',array['Casual']);`,
     );

@@ -7,6 +7,8 @@ import {
   legacyId,
   saveLook,
   savePiece,
+  saveMannequin,
+  deleteMannequin,
   supabaseConfigured,
 } from "../lib/supabase";
 const owner = "11111111-1111-4111-8111-111111111111";
@@ -127,6 +129,65 @@ test("failed approval removes only the generated upload", async () => {
   assert.equal(events[1], "update:clothing_items");
   assert.match(events[2], /^remove:/);
   assert.notEqual(events[2], `remove:${owner}/old.jpg`);
+});
+test("replacing a mannequin photo updates the profile before removing the old private file", async () => {
+  const { api, events } = fakeClient();
+  const previous = {
+    source: "photo" as const,
+    photoPath: `${owner}/mannequin/old.jpg`,
+    image: "signed",
+    traits: {},
+  };
+  const result = await saveMannequin(
+    owner,
+    "data:image/jpeg;base64,/9j/2Q==",
+    "generated",
+    { hair: "curto" },
+    previous,
+    api,
+  );
+  assert.equal(result.cleanupWarning, false);
+  assert.match(events[0], new RegExp(`^upload:${owner}/mannequin/`));
+  assert.equal(events[1], "update:profiles");
+  assert.equal(events[2], `remove:${previous.photoPath}`);
+});
+test("failed mannequin update removes only the new file", async () => {
+  const { api, events } = fakeClient({ rowError: true });
+  const previous = {
+    source: "photo" as const,
+    photoPath: `${owner}/mannequin/old.jpg`,
+    image: "signed",
+    traits: {},
+  };
+  await assert.rejects(() =>
+    saveMannequin(
+      owner,
+      "data:image/jpeg;base64,/9j/2Q==",
+      "photo",
+      {},
+      previous,
+      api,
+    ),
+  );
+  assert.equal(events[1], "update:profiles");
+  assert.match(events[2], /^remove:/);
+  assert.notEqual(events[2], `remove:${previous.photoPath}`);
+});
+test("deleting a mannequin keeps the private photo when the profile update fails", async () => {
+  const { api, events } = fakeClient({ rowError: true });
+  await assert.rejects(() =>
+    deleteMannequin(
+      owner,
+      {
+        source: "photo",
+        photoPath: `${owner}/mannequin/old.jpg`,
+        image: "signed",
+        traits: {},
+      },
+      api,
+    ),
+  );
+  assert.deepEqual(events, ["update:profiles"]);
 });
 test("failed row deletion keeps the photo", async () => {
   const { api, events } = fakeClient({ rowError: true });

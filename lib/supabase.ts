@@ -129,6 +129,97 @@ export async function loadCloset(
   return { version: 1, pieces, looks };
 }
 export type MutationResult = { cleanupWarning: boolean };
+export type Mannequin = {
+  source: "photo" | "generated";
+  photoPath: string;
+  image: string;
+  traits: Record<string, string>;
+};
+export async function loadMannequin(
+  userId: string,
+  api: SupabaseClient = getSupabase(),
+): Promise<Mannequin | null> {
+  const { data, error } = await api
+    .from("profiles")
+    .select("mannequin_photo_path,mannequin_source,mannequin_traits")
+    .eq("id", userId)
+    .single();
+  if (error) throw error;
+  if (!data.mannequin_photo_path || !data.mannequin_source) return null;
+  const signed = await api.storage
+    .from(PHOTO_BUCKET)
+    .createSignedUrl(data.mannequin_photo_path, 600);
+  if (signed.error) throw signed.error;
+  return {
+    source: data.mannequin_source as Mannequin["source"],
+    photoPath: data.mannequin_photo_path,
+    image: signed.data.signedUrl,
+    traits: (data.mannequin_traits ?? {}) as Record<string, string>,
+  };
+}
+export async function saveMannequin(
+  userId: string,
+  image: string,
+  source: Mannequin["source"],
+  traits: Record<string, string>,
+  original: Mannequin | null,
+  api: SupabaseClient = getSupabase(),
+): Promise<MutationResult> {
+  if (!image.startsWith("data:image/jpeg;base64,"))
+    throw new Error("Escolha ou gere uma foto JPEG antes de salvar.");
+  const path = `${userId}/mannequin/${crypto.randomUUID()}.jpg`;
+  const blob = await (await fetch(image)).blob();
+  if (blob.size > 6 * 1024 * 1024) throw new Error("A foto excede 6 MB.");
+  const upload = await api.storage.from(PHOTO_BUCKET).upload(path, blob, {
+    contentType: "image/jpeg",
+    upsert: false,
+    cacheControl: "0",
+  });
+  if (upload.error) throw upload.error;
+  try {
+    const update = await api
+      .from("profiles")
+      .update({
+        mannequin_photo_path: path,
+        mannequin_source: source,
+        mannequin_traits: traits,
+      })
+      .eq("id", userId)
+      .select("id")
+      .single();
+    if (update.error) throw update.error;
+  } catch (cause) {
+    const cleaned = await removePhoto(path, api);
+    if (!cleaned)
+      throw new Error(
+        "Manequim não salvo. O novo arquivo pode precisar de limpeza no Storage.",
+      );
+    throw cause;
+  }
+  return {
+    cleanupWarning: original?.photoPath
+      ? !(await removePhoto(original.photoPath, api))
+      : false,
+  };
+}
+export async function deleteMannequin(
+  userId: string,
+  original: Mannequin,
+  api: SupabaseClient = getSupabase(),
+): Promise<MutationResult> {
+  const update = await api
+    .from("profiles")
+    .update({
+      mannequin_photo_path: null,
+      mannequin_source: null,
+      mannequin_traits: {},
+    })
+    .eq("id", userId)
+    .select("id")
+    .single();
+  if (update.error) throw update.error;
+  return { cleanupWarning: !(await removePhoto(original.photoPath, api)) };
+}
 async function removePhoto(
   path: string,
   api: SupabaseClient,

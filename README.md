@@ -4,7 +4,7 @@ Guarda-roupa digital em português brasileiro, feito com Next.js App Router, Typ
 
 ## Instalação
 
-Requer Node.js 20.9+ e npm.
+Requer Node.js 22.18+ e npm.
 
 ```sh
 npm install
@@ -37,7 +37,7 @@ Ao substituir uma foto, o aplicativo envia a nova, grava o novo caminho na peça
 
 ## Versão de catálogo com IA
 
-Depois de salvar uma peça com foto, abra **Editar peça → Gerar versão de catálogo**. O app envia a foto original privada ao servidor, que confirma a sessão e a propriedade da peça, baixa o arquivo com as políticas RLS e pede uma edição ao modelo `openai/gpt-image-1-mini` pelo Vercel AI Gateway. Esse modelo é elegível ao crédito gratuito do AI Gateway, sujeito aos limites da Vercel, e pode produzir menos detalhes que modelos maiores. A prévia gerada volta ao navegador sem ser salva. Compare **Original / Gerada por IA** e escolha **Usar esta versão** ou **Descartar**. Apenas **Salvar peça** grava a versão aceita em outro arquivo JPEG no bucket privado. A original permanece disponível; é possível voltar a exibi-la. Trocar ou excluir a foto limpa os arquivos antigos quando o banco confirma a alteração.
+Ao adicionar **ou editar** uma peça, escolha uma foto e toque em **Gerar versão de catálogo** antes de salvar. Para uma foto nova, o navegador envia o JPEG preparado ao servidor autenticado sem criar uma peça ou arquivo no Supabase. Para uma foto já salva, o servidor confirma a propriedade e a lê do Storage privado com RLS. A edição usa `openai/gpt-image-1-mini` pelo Vercel AI Gateway. Esse modelo é elegível ao crédito gratuito do AI Gateway, sujeito aos limites da Vercel, e pode produzir menos detalhes que modelos maiores. A prévia volta ao navegador sem ser salva. Compare **Original / Gerada por IA** e escolha **Usar esta versão** ou **Descartar**. Apenas **Salvar peça** grava a foto original e a versão aceita em arquivos separados no bucket privado. Trocar ou excluir a foto limpa os arquivos antigos quando o banco confirma a alteração.
 
 A geração pode alterar detalhes de tecido, cor ou marca; confira a prévia antes de aprovar. Uma geração consome créditos do AI Gateway, mesmo quando descartada. As fotos são enviadas ao provedor do modelo para processamento. Consulte as opções de privacidade e cobrança do AI Gateway antes de usar fotos sensíveis. A função é exclusiva do closet pessoal; o modo demonstração não envia imagens.
 
@@ -46,6 +46,16 @@ No projeto Supabase existente, aplique uma única vez [a migration aditiva da ve
 Na Vercel, habilite o AI Gateway, ative OIDC no projeto e configure um orçamento adequado para as gerações. Depois de ativar OIDC, crie um novo deployment. No projeto `closet-ai` conectado nesta sessão, OIDC já foi habilitado. O SDK aceita o token OIDC fornecido pela Vercel ao deployment ou à requisição, sem chave de provedor no cliente. Para rodar a geração localmente, configure uma chave **do AI Gateway** em `AI_GATEWAY_API_KEY` apenas no `.env.local`; não use `NEXT_PUBLIC_` nessa variável. Se a autenticação do Gateway falhar, o erro aparece junto ao botão e o cadastro normal continua funcionando.
 
 Se o Gateway devolver `403` mesmo com OIDC ativo, confira **AI Gateway → créditos e acesso da equipe** no painel Vercel. Um `GatewayInternalServerError` com `403` e sem `ruleId` indica que a requisição chegou ao Gateway, mas não aponta para uma regra de bloqueio de modelo. Caso o painel mostre acesso e créditos disponíveis, abra um chamado com o suporte da Vercel informando o ID da equipe e o horário/request ID do log, sem anexar fotos ou credenciais.
+
+## Manequim e provador de looks (prévia)
+
+Em **Montar look → Meu manequim**, escolha **Usar minha foto** (câmera ou galeria, preferencialmente corpo inteiro) ou **Criar com características** (apresentação, tom de pele, cabelo e biotipo). A segunda opção gera uma pessoa fictícia fotorrealista com GPT Image 1 Mini. Confira a prévia e toque em **Salvar manequim**. A imagem é guardada no bucket privado, vinculada ao seu perfil; você pode substituí-la ou excluí-la. As políticas RLS existentes de `profiles` e Storage limitam o acesso ao proprietário.
+
+Em **Montar look** ou **Meus looks**, abra **Ver detalhes e experimentar** para consultar cada peça. Com um manequim salvo e foto em todas as peças do look, toque em **Ver como ficaria em mim**. O servidor busca somente o look, o manequim e as peças da sua conta, envia as imagens ao AI Gateway e devolve uma prévia temporária. A visualização não é salva. Cada geração consome créditos, mesmo se você fechar a prévia. A IA pode alterar rosto, corpo, cores ou detalhes; a imagem é ilustrativa e não prevê tamanho ou caimento real. Fotos de outras pessoas exigem a autorização delas.
+
+**Antes de publicar esta mudança em outro projeto Supabase**, revise e aplique uma única vez [a migration aditiva do manequim](supabase/migrations/20261025185725_mannequin_profile.sql) no **SQL Editor** do projeto correto. Ela adiciona apenas três colunas e uma restrição a `profiles`; não remove registros nem muda o bucket. No projeto `Closet AI` conectado nesta sessão, ela já foi aplicada e registrada como `20261025185725`; não a execute novamente nesse projeto. Se o SQL Editor indicar que as colunas já existem em outro projeto, interrompa e confira o histórico antes de repetir. O modo demonstração não envia fotos nem chama o provador por IA.
+
+Uma futura versão paga pode financiar os créditos de IA. **Não há cobrança, assinatura ou controle de acesso pago nesta versão**: o cadastro do guarda-roupa e a geração de looks determinística seguem disponíveis para a conta; as chamadas de imagem dependem dos créditos e limites da equipe no AI Gateway.
 
 ## Testes
 
@@ -58,7 +68,7 @@ npm run test:e2e
 npm run test:e2e:auth
 ```
 
-Os testes de interface usam Chromium em viewport de iPhone e rodam sem acesso ao seu projeto Supabase. O teste `test:e2e:auth` simula a API para verificar cadastro, login, recuperação, fotos, comparação e aprovação da imagem gerada, edição e exclusão. Os testes de banco executam as migrations em PostgreSQL local (PGlite) e verificam RLS entre dois usuários. Por padrão usa `/usr/bin/chromium` se disponível; em outro ambiente, execute `npx playwright install chromium` ou defina `PLAYWRIGHT_CHROMIUM_PATH`. Testes locais não substituem a validação manual da câmera, galeria, links de e-mail, geração real, área segura e instalação em um iPhone físico com Safari.
+Os testes de interface usam Chromium em viewport de iPhone e rodam sem acesso ao seu projeto Supabase. O teste `test:e2e:auth` simula a API para verificar cadastro, login, recuperação, geração de catálogo antes de salvar, manequim gerado, edição e exclusão. Os testes de banco executam as migrations em PostgreSQL local (PGlite) e verificam RLS entre dois usuários. Por padrão usa `/usr/bin/chromium` se disponível; em outro ambiente, execute `npx playwright install chromium` ou defina `PLAYWRIGHT_CHROMIUM_PATH`. Testes locais não substituem a validação manual da câmera, galeria, links de e-mail, geração real do manequim e do provador, área segura e instalação em um iPhone físico com Safari.
 
 ## Publicar na Vercel
 
@@ -71,4 +81,4 @@ Manifesto, ícones, metadados iOS e service worker permitem instalar o site na T
 
 ## Escopo
 
-A V2 oferece autenticação por e-mail, recuperação de senha, dados por usuário e Storage privado. A geração de looks segue regras determinísticas locais sobre as peças carregadas da conta. A versão de catálogo usa IA apenas para apresentar fotos individuais após aprovação. Ainda não há análise de moda por IA, compartilhamento entre contas ou acesso offline aos dados pessoais.
+A V2 oferece autenticação por e-mail, recuperação de senha, dados por usuário e Storage privado. A geração de looks segue regras determinísticas locais sobre as peças carregadas da conta. A versão de catálogo e o provador usam IA apenas após ação explícita. Ainda não há análise de moda por IA, compartilhamento entre contas, previsão fiel de medidas ou acesso offline aos dados pessoais.

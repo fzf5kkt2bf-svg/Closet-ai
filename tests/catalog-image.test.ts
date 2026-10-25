@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { POST } from "../app/api/catalog-image/route";
 import { catalogPrompt } from "../lib/catalog-image";
+import { POST as tryOn } from "../app/api/try-on/route";
 
 test("catalog route refuses unauthenticated and malformed requests before generation", async () => {
   const old = {
@@ -51,4 +52,28 @@ test("catalog prompt asks to preserve the photographed piece", () => {
   assert.match(prompt, /Preserve|preserve/);
   assert.match(prompt, /folds/);
   assert.match(prompt, /Calça verde/);
+});
+test("try-on route does not generate without a signed-in user", async () => {
+  const oldUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const oldKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test_only";
+  try {
+    const response = await tryOn(
+      new Request("http://localhost/api/try-on", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "look",
+          lookId: "11111111-1111-4111-8111-111111111111",
+        }),
+      }),
+    );
+    assert.equal(response.status, 401);
+  } finally {
+    if (oldUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = oldUrl;
+    if (oldKey === undefined)
+      delete process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    else process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = oldKey;
+  }
 });
