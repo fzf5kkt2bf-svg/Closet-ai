@@ -40,6 +40,17 @@ test("separate demo retains five screens and never enters the personal closet", 
   await page.getByRole("button", { name: "Gerar 3 combinações" }).click();
   await expect(page.locator(".look-card")).toHaveCount(3);
   await page
+    .getByRole("button", { name: "Ver detalhes e experimentar" })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Detalhes do look" }),
+  ).toContainText("peça desta combinação");
+  await expect(
+    page.getByRole("button", { name: "Ver como ficaria em mim" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Fechar detalhes do look" }).click();
+  await page
     .getByRole("button", { name: "Salvar look como favorito" })
     .first()
     .click();

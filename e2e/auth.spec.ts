@@ -22,15 +22,33 @@ test("email signup, login and personal closet using simulated Supabase", async (
     created_at: new Date().toISOString(),
   };
   let row: Record<string, unknown> | null = null;
+  let mannequinRow: Record<string, unknown> = {
+    id: userId,
+    mannequin_photo_path: null,
+    mannequin_source: null,
+    mannequin_traits: {},
+  };
   let uploadedPath = "";
   const removedPaths: string[] = [];
   const uploadedPaths: string[] = [];
   const sampleImage = await readFile("public/icon-192.png");
   const catalogImage = await sharp(sampleImage).jpeg().toBuffer();
+  await page.route("**/api/try-on", async (route) => {
+    expect(route.request().headers().authorization).toMatch(/^Bearer /);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        image: `data:image/jpeg;base64,${catalogImage.toString("base64")}`,
+      }),
+    });
+  });
   let generationCalls = 0;
   let generationError = true;
+  let inlineGenerationCalls = 0;
   await page.route("**/api/catalog-image", async (route) => {
     expect(route.request().headers().authorization).toMatch(/^Bearer /);
+    if (route.request().postDataJSON()?.photo) inlineGenerationCalls++;
     generationCalls++;
     await route.fulfill({
       status: generationError ? 503 : 200,
@@ -135,6 +153,12 @@ test("email signup, login and personal closet using simulated Supabase", async (
       row = null;
       return respond({ id });
     }
+    if (path === "/rest/v1/profiles" && request.method() === "GET")
+      return respond(mannequinRow);
+    if (path === "/rest/v1/profiles" && request.method() === "PATCH") {
+      mannequinRow = { ...mannequinRow, ...request.postDataJSON() };
+      return respond({ id: userId });
+    }
     if (path === "/rest/v1/outfits") return respond([]);
     return respond({ message: `Rota simulada ausente: ${path}` }, 404);
   });
@@ -155,6 +179,22 @@ test("email signup, login and personal closet using simulated Supabase", async (
   ).toBeVisible();
   await page
     .getByRole("navigation")
+    .getByRole("button", { name: "Montar look", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Criar com características" }).click();
+  await page.getByRole("button", { name: "Gerar manequim realista" }).click();
+  await expect(
+    page.getByAltText("Prévia do manequim antes de salvar"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Salvar manequim" }).click();
+  await expect(page.getByRole("status")).toContainText("Manequim salvo");
+  expect(mannequinRow).toMatchObject({ mannequin_source: "generated" });
+  expect(mannequinRow.mannequin_photo_path).toMatch(
+    new RegExp(`^${userId}/mannequin/`),
+  );
+  await expect(page.getByAltText("Manequim salvo na sua conta")).toBeVisible();
+  await page
+    .getByRole("navigation")
     .getByRole("button", { name: "Guarda-roupa", exact: true })
     .click();
   await expect(page.locator(".piece-card")).toHaveCount(0);
@@ -170,6 +210,13 @@ test("email signup, login and personal closet using simulated Supabase", async (
     .locator("input[type=file]:not([capture])")
     .setInputFiles("public/icon-192.png");
   await expect(page.locator(".upload-preview img")).toBeVisible();
+  await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
+  await expect(page.locator(".catalog-editor [role=alert]")).toContainText(
+    "AI Gateway indisponível",
+  );
+  generationError = false;
+  await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
+  await page.getByRole("button", { name: "Usar esta versão" }).click();
   await page.getByRole("button", { name: "Salvar peça" }).click();
   await expect(page.locator(".piece-card")).toHaveCount(1);
   await expect(page.locator(".piece-card")).toContainText("Blusa pessoal");
@@ -182,6 +229,7 @@ test("email signup, login and personal closet using simulated Supabase", async (
   await expect(page.locator(".piece-card")).toContainText("Blusa editada");
   await page.locator(".piece-card").click();
   await page.getByRole("button", { name: "Editar peça" }).click();
+  generationError = true;
   await page.getByRole("button", { name: "Gerar versão de catálogo" }).click();
   await expect(page.locator(".catalog-editor [role=alert]")).toContainText(
     "AI Gateway indisponível",
@@ -199,14 +247,17 @@ test("email signup, login and personal closet using simulated Supabase", async (
   await page.getByRole("button", { name: "Usar esta versão" }).click();
   await page.getByRole("button", { name: "Salvar peça" }).click();
   await expect(page.locator(".piece-card")).toHaveCount(1);
-  expect(generationCalls).toBe(3);
-  expect(uploadedPaths).toHaveLength(2);
+  expect(inlineGenerationCalls).toBe(2);
+  expect(generationCalls).toBe(5);
+  expect(uploadedPaths).toHaveLength(4);
   await page.locator(".piece-card").click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Excluir peça" }).click();
   await expect(page.locator(".piece-card")).toHaveCount(0);
-  expect(removedPaths).toContain(uploadedPaths[0]);
   expect(removedPaths).toContain(uploadedPaths[1]);
+  expect(removedPaths).toContain(uploadedPaths[2]);
+  expect(removedPaths).toContain(uploadedPaths[3]);
+  expect(removedPaths).not.toContain(uploadedPaths[0]);
   await page.getByRole("button", { name: "Sair" }).click();
   await expect(
     page.getByRole("heading", { name: /Bem-vinda ao seu closet/ }),

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   Home,
   Shirt,
@@ -42,9 +43,25 @@ import {
   deleteLook,
   importLegacyCloset,
   getSupabase,
+  loadMannequin,
+  saveMannequin,
+  deleteMannequin,
+  type Mannequin,
 } from "@/lib/supabase";
 import Garment from "./garment";
 type Tab = "home" | "wardrobe" | "add" | "generate" | "looks";
+type MannequinTraits = {
+  presentation: "feminina" | "masculina" | "androgina";
+  skin: "clara" | "media" | "escura";
+  hair: "curto" | "medio" | "longo" | "raspado";
+  build: "esguio" | "medio" | "robusto";
+};
+const initialTraits: MannequinTraits = {
+  presentation: "feminina",
+  skin: "media",
+  hair: "medio",
+  build: "medio",
+};
 const tabs = [
   { id: "home", label: "Início", icon: Home },
   { id: "wardrobe", label: "Guarda-roupa", icon: Shirt },
@@ -89,10 +106,26 @@ export default function Closet({
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
   const [candidateImage, setCandidateImage] = useState<string | null>(null);
+  const [mannequin, setMannequin] = useState<Mannequin | null>(null);
+  const [mannequinMode, setMannequinMode] = useState<"photo" | "generated">(
+    "photo",
+  );
+  const [mannequinDraft, setMannequinDraft] = useState<string | null>(null);
+  const [mannequinTraits, setMannequinTraits] =
+    useState<MannequinTraits>(initialTraits);
+  const [mannequinBusy, setMannequinBusy] = useState(false);
+  const [mannequinError, setMannequinError] = useState("");
+  const [lookDetail, setLookDetail] = useState<Look | null>(null);
+  const [tryOnImage, setTryOnImage] = useState<string | null>(null);
+  const [tryOnBusy, setTryOnBusy] = useState(false);
+  const [tryOnError, setTryOnError] = useState("");
   const [legacyCount, setLegacyCount] = useState(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const lookDialogRef = useRef<HTMLDialogElement>(null);
   const mutationLock = useRef(false);
+  const mannequinVersion = useRef(0);
+  const tryOnRequest = useRef(0);
   const draftIdRef = useRef<string | null>(null);
   useEffect(() => {
     draftIdRef.current = draft?.id ?? null;
@@ -102,7 +135,7 @@ export default function Closet({
     if (!userId) return;
     let active = true;
     const refresh = () => {
-      if (document.visibilityState === "visible")
+      if (document.visibilityState === "visible") {
         loadCloset(userId)
           .then((next) => {
             if (active) setData(next);
@@ -113,6 +146,19 @@ export default function Closet({
                 "Não foi possível atualizar seu closet. Confira a conexão e tente novamente.",
               );
           });
+        const version = mannequinVersion.current;
+        loadMannequin(userId)
+          .then((next) => {
+            if (active && version === mannequinVersion.current)
+              setMannequin(next);
+          })
+          .catch(() => {
+            if (active)
+              setMannequinError(
+                "Não foi possível carregar o manequim. Confira se a migration foi aplicada.",
+              );
+          });
+      }
     };
     refresh();
     readLegacyData()
@@ -133,6 +179,10 @@ export default function Closet({
     if (selected) dialogRef.current?.showModal();
     else dialogRef.current?.close();
   }, [selected]);
+  useEffect(() => {
+    if (lookDetail) lookDialogRef.current?.showModal();
+    else lookDialogRef.current?.close();
+  }, [lookDetail]);
   function navigate(next: Tab) {
     setTab(next);
     setNotice("");
@@ -246,7 +296,8 @@ export default function Closet({
     }
   }
   async function generateCatalogImage() {
-    if (!draft?.photoPath || mode !== "personal" || aiBusy || busy) return;
+    if (!draft?.image || mode !== "personal" || aiBusy || busy || photoBusy)
+      return;
     const targetId = draft.id;
     setAiBusy(true);
     setCandidateImage(null);
@@ -263,7 +314,19 @@ export default function Closet({
           Authorization: `Bearer ${sessionData.session.access_token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ pieceId: targetId }),
+        body: JSON.stringify(
+          draft.image.startsWith("data:image/")
+            ? {
+                photo: draft.image,
+                details: {
+                  name: draft.name,
+                  category: draft.category,
+                  color: draft.color,
+                  style: draft.style ?? "",
+                },
+              }
+            : { pieceId: targetId },
+        ),
       });
       const result = await response.json().catch(() => null);
       if (!response.ok)
@@ -286,6 +349,158 @@ export default function Closet({
     } finally {
       setAiBusy(false);
     }
+  }
+  async function requestAiImage(
+    body: Record<string, unknown>,
+  ): Promise<string> {
+    const { data: sessionData, error: sessionError } =
+      await getSupabase().auth.getSession();
+    if (sessionError || !sessionData.session?.access_token)
+      throw new Error("Sua sessão expirou. Entre novamente.");
+    const response = await fetch("/api/try-on", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${sessionData.session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok)
+      throw new Error(
+        result?.error ?? `Falha na geração (HTTP ${response.status}).`,
+      );
+    if (
+      typeof result?.image !== "string" ||
+      !result.image.startsWith("data:image/jpeg;base64,")
+    )
+      throw new Error("A imagem recebida é inválida.");
+    return result.image;
+  }
+  async function chooseMannequinPhoto(file?: File) {
+    if (!file) return;
+    setMannequinBusy(true);
+    setMannequinError("");
+    try {
+      setMannequinDraft(await preparePhoto(file));
+    } catch (cause) {
+      setMannequinError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível carregar a foto.",
+      );
+    } finally {
+      setMannequinBusy(false);
+    }
+  }
+  async function generateMannequin() {
+    if (mannequinBusy) return;
+    setMannequinBusy(true);
+    setMannequinError("");
+    setMannequinDraft(null);
+    try {
+      setMannequinDraft(
+        await requestAiImage({ action: "mannequin", traits: mannequinTraits }),
+      );
+    } catch (cause) {
+      setMannequinError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível gerar o manequim.",
+      );
+    } finally {
+      setMannequinBusy(false);
+    }
+  }
+  async function persistMannequin() {
+    if (!userId || !mannequinDraft || mannequinBusy) return;
+    setMannequinBusy(true);
+    mannequinVersion.current++;
+    setMannequinError("");
+    try {
+      const result = await saveMannequin(
+        userId,
+        mannequinDraft,
+        mannequinMode,
+        mannequinMode === "generated" ? mannequinTraits : {},
+        mannequin,
+      );
+      const saved = await loadMannequin(userId);
+      mannequinVersion.current++;
+      setMannequin(saved);
+      setMannequinDraft(null);
+      setNotice(
+        "Manequim salvo na sua conta privada." +
+          (result.cleanupWarning
+            ? " A foto antiga pode precisar de limpeza no Storage."
+            : ""),
+      );
+    } catch (cause) {
+      setMannequinError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível salvar o manequim.",
+      );
+    } finally {
+      setMannequinBusy(false);
+    }
+  }
+  async function removeMannequin() {
+    if (
+      !userId ||
+      !mannequin ||
+      mannequinBusy ||
+      !window.confirm("Excluir seu manequim e a foto associada?")
+    )
+      return;
+    setMannequinBusy(true);
+    mannequinVersion.current++;
+    setMannequinError("");
+    try {
+      const result = await deleteMannequin(userId, mannequin);
+      mannequinVersion.current++;
+      setMannequin(null);
+      setTryOnImage(null);
+      setNotice(
+        "Manequim excluído." +
+          (result.cleanupWarning
+            ? " A foto pode precisar de limpeza no Storage."
+            : ""),
+      );
+    } catch (cause) {
+      setMannequinError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível excluir o manequim.",
+      );
+    } finally {
+      setMannequinBusy(false);
+    }
+  }
+  async function viewTryOn(look: Look) {
+    if (tryOnBusy) return;
+    const requestId = ++tryOnRequest.current;
+    setTryOnBusy(true);
+    setTryOnError("");
+    setTryOnImage(null);
+    try {
+      const image = await requestAiImage({ action: "look", lookId: look.id });
+      if (requestId === tryOnRequest.current) setTryOnImage(image);
+    } catch (cause) {
+      if (requestId === tryOnRequest.current)
+        setTryOnError(
+          cause instanceof Error
+            ? cause.message
+            : "Não foi possível visualizar o look.",
+        );
+    } finally {
+      if (requestId === tryOnRequest.current) setTryOnBusy(false);
+    }
+  }
+  function closeLookDetail() {
+    tryOnRequest.current++;
+    setLookDetail(null);
+    setTryOnBusy(false);
   }
   async function generate() {
     if (!data) return;
@@ -477,6 +692,18 @@ export default function Closet({
           <span className="piece-count">{pieces.length} peças</span>
         </div>
         <p className="look-items">{pieces.map((p) => p.name).join(" + ")}</p>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => {
+            tryOnRequest.current++;
+            setLookDetail(current);
+            setTryOnImage(null);
+            setTryOnError("");
+          }}
+        >
+          Ver detalhes e experimentar <ChevronRight size={16} />
+        </button>
       </article>
     );
   }
@@ -876,7 +1103,7 @@ export default function Closet({
                       <label className="button secondary">
                         <Camera size={17} /> Câmera
                         <input
-                          disabled={photoBusy}
+                          disabled={photoBusy || aiBusy}
                           type="file"
                           accept="image/*"
                           capture="environment"
@@ -889,7 +1116,7 @@ export default function Closet({
                       <label className="button secondary">
                         <ImagePlus size={17} /> Galeria
                         <input
-                          disabled={photoBusy}
+                          disabled={photoBusy || aiBusy}
                           type="file"
                           accept="image/*"
                           onChange={(e) => {
@@ -904,6 +1131,7 @@ export default function Closet({
                       <button
                         type="button"
                         className="text-button"
+                        disabled={aiBusy}
                         onClick={() =>
                           setDraft({
                             ...draft,
@@ -921,129 +1149,121 @@ export default function Closet({
                       Foto opcional · até 20 MB. Sem foto, usamos uma
                       ilustração.
                     </p>
-                    {draft.image?.startsWith("data:image/") && (
-                      <p className="hint">
-                        Salve esta foto antes de gerar a versão de catálogo.
-                      </p>
-                    )}
-                    {draft.photoPath &&
-                      !draft.image?.startsWith("data:image/") &&
-                      mode === "personal" && (
-                        <div className="catalog-editor">
-                          <span className="eyebrow">ESTÚDIO IA</span>
-                          <h3>Versão de catálogo</h3>
-                          <p>
-                            Gere uma apresentação em fundo claro e confira os
-                            detalhes antes de usar. Cada geração pode ter custo.
-                            A foto original fica guardada.
+                    {draft.image && mode === "personal" && (
+                      <div className="catalog-editor">
+                        <span className="eyebrow">ESTÚDIO IA</span>
+                        <h3>Versão de catálogo</h3>
+                        <p>
+                          Gere uma apresentação em fundo claro e confira os
+                          detalhes antes de usar. Cada geração pode ter custo. A
+                          foto original fica guardada.
+                        </p>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          disabled={aiBusy || busy || photoBusy}
+                          onClick={() => void generateCatalogImage()}
+                        >
+                          {aiBusy ? (
+                            <LoaderCircle size={16} className="spinner" />
+                          ) : (
+                            <Sparkles size={16} />
+                          )}
+                          {aiBusy
+                            ? "Gerando imagem…"
+                            : "Gerar versão de catálogo"}
+                        </button>
+                        {aiBusy && (
+                          <p role="status">
+                            A geração pode levar até dois minutos.
                           </p>
-                          <button
-                            type="button"
-                            className="button secondary"
-                            disabled={aiBusy || busy || photoBusy}
-                            onClick={() => void generateCatalogImage()}
-                          >
-                            {aiBusy ? (
-                              <LoaderCircle size={16} className="spinner" />
-                            ) : (
-                              <Sparkles size={16} />
-                            )}
-                            {aiBusy
-                              ? "Gerando imagem…"
-                              : "Gerar versão de catálogo"}
-                          </button>
-                          {aiBusy && (
+                        )}
+                        {aiError && (
+                          <p role="alert" className="alert error">
+                            {aiError}
+                          </p>
+                        )}
+                        {!candidateImage &&
+                          draft.enhancedImage?.startsWith("data:image/") && (
                             <p role="status">
-                              A geração pode levar até dois minutos.
+                              Versão escolhida. Toque em “Salvar peça” para
+                              aplicá-la.
                             </p>
                           )}
-                          {aiError && (
-                            <p role="alert" className="alert error">
-                              {aiError}
-                            </p>
-                          )}
-                          {!candidateImage &&
-                            draft.enhancedImage?.startsWith("data:image/") && (
-                              <p role="status">
-                                Versão escolhida. Toque em “Salvar peça” para
-                                aplicá-la.
-                              </p>
-                            )}
-                          {candidateImage && (
-                            <div
-                              className="catalog-review"
-                              role="group"
-                              aria-label="Comparar foto original e versão gerada"
-                            >
-                              <figure>
-                                <div className="catalog-review-art">
-                                  <Garment
-                                    piece={{
-                                      ...draft,
-                                      enhancedImage: undefined,
-                                    }}
-                                  />
-                                </div>
-                                <figcaption>Original</figcaption>
-                              </figure>
-                              <figure>
-                                <div className="catalog-review-art">
-                                  <Garment
-                                    piece={{
-                                      ...draft,
-                                      enhancedImage: candidateImage,
-                                    }}
-                                  />
-                                </div>
-                                <figcaption>Gerada por IA</figcaption>
-                              </figure>
-                              <div className="catalog-review-actions">
-                                <button
-                                  type="button"
-                                  className="button"
-                                  onClick={() => {
-                                    setDraft({
-                                      ...draft,
-                                      enhancedImage: candidateImage,
-                                      enhancedPhotoPath: undefined,
-                                    });
-                                    setCandidateImage(null);
-                                    setNotice(
-                                      "Versão escolhida. Salve a peça para aplicá-la ao guarda-roupa.",
-                                    );
-                                  }}
-                                >
-                                  Usar esta versão
-                                </button>
-                                <button
-                                  type="button"
-                                  className="button secondary"
-                                  onClick={() => setCandidateImage(null)}
-                                >
-                                  Descartar
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                          {!candidateImage &&
-                            (draft.enhancedImage ||
-                              draft.enhancedPhotoPath) && (
-                              <button
-                                type="button"
-                                className="text-button"
-                                onClick={() =>
-                                  setDraft({
+                        {candidateImage && (
+                          <div
+                            className="catalog-review"
+                            role="group"
+                            aria-label="Comparar foto original e versão gerada"
+                          >
+                            <figure>
+                              <div className="catalog-review-art">
+                                <Garment
+                                  piece={{
                                     ...draft,
                                     enhancedImage: undefined,
+                                  }}
+                                />
+                              </div>
+                              <figcaption>Original</figcaption>
+                            </figure>
+                            <figure>
+                              <div className="catalog-review-art">
+                                <Garment
+                                  piece={{
+                                    ...draft,
+                                    enhancedImage: candidateImage,
+                                  }}
+                                />
+                              </div>
+                              <figcaption>Gerada por IA</figcaption>
+                            </figure>
+                            <div className="catalog-review-actions">
+                              <button
+                                type="button"
+                                className="button"
+                                onClick={() => {
+                                  setDraft({
+                                    ...draft,
+                                    enhancedImage: candidateImage,
                                     enhancedPhotoPath: undefined,
-                                  })
-                                }
+                                  });
+                                  setCandidateImage(null);
+                                  setNotice(
+                                    "Versão escolhida. Salve a peça para aplicá-la ao guarda-roupa.",
+                                  );
+                                }}
                               >
-                                Voltar a exibir a foto original
+                                Usar esta versão
                               </button>
-                            )}
-                        </div>
-                      )}
+                              <button
+                                type="button"
+                                className="button secondary"
+                                onClick={() => setCandidateImage(null)}
+                              >
+                                Descartar
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {!candidateImage &&
+                          (draft.enhancedImage || draft.enhancedPhotoPath) && (
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() =>
+                                setDraft({
+                                  ...draft,
+                                  enhancedImage: undefined,
+                                  enhancedPhotoPath: undefined,
+                                })
+                              }
+                            >
+                              Voltar a exibir a foto original
+                            </button>
+                          )}
+                      </div>
+                    )}
                   </div>
                   <div className="form-fields">
                     <label>
@@ -1199,6 +1419,234 @@ export default function Closet({
                     Até 3 looks únicos, conforme as peças disponíveis.
                   </p>
                 </section>
+                {mode === "personal" && (
+                  <section
+                    className="mannequin-panel"
+                    aria-labelledby="mannequin-title"
+                  >
+                    <div>
+                      <span className="eyebrow">SEU PROVADOR</span>
+                      <h2 id="mannequin-title">Meu manequim</h2>
+                      <p>
+                        Cadastre uma foto sua ou crie uma pessoa fictícia
+                        realista para visualizar looks. Uma foto de corpo
+                        inteiro, de frente e com boa luz ajuda no resultado.
+                      </p>
+                    </div>
+                    {mannequin && (
+                      <div className="mannequin-current">
+                        <Image
+                          unoptimized
+                          width={86}
+                          height={108}
+                          src={mannequin.image}
+                          alt="Manequim salvo na sua conta"
+                        />
+                        <div>
+                          <p>
+                            Manequim{" "}
+                            {mannequin.source === "photo"
+                              ? "com sua foto"
+                              : "criado por IA"}{" "}
+                            salvo.
+                          </p>
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={mannequinBusy}
+                            onClick={() => void removeMannequin()}
+                          >
+                            <Trash2 size={15} /> Excluir manequim
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <div
+                      className="chips"
+                      role="group"
+                      aria-label="Como criar o manequim"
+                    >
+                      <button
+                        type="button"
+                        className={
+                          mannequinMode === "photo" ? "chip active" : "chip"
+                        }
+                        aria-pressed={mannequinMode === "photo"}
+                        onClick={() => {
+                          setMannequinMode("photo");
+                          setMannequinDraft(null);
+                        }}
+                      >
+                        Usar minha foto
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          mannequinMode === "generated" ? "chip active" : "chip"
+                        }
+                        aria-pressed={mannequinMode === "generated"}
+                        onClick={() => {
+                          setMannequinMode("generated");
+                          setMannequinDraft(null);
+                        }}
+                      >
+                        Criar com características
+                      </button>
+                    </div>
+                    {mannequinMode === "photo" ? (
+                      <div className="upload-buttons">
+                        <label className="button secondary">
+                          <Camera size={17} /> Câmera
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="user"
+                            disabled={mannequinBusy}
+                            onChange={(e) => {
+                              void chooseMannequinPhoto(e.target.files?.[0]);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                        <label className="button secondary">
+                          <ImagePlus size={17} /> Galeria
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={mannequinBusy}
+                            onChange={(e) => {
+                              void chooseMannequinPhoto(e.target.files?.[0]);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="mannequin-traits">
+                        <label>
+                          Apresentação
+                          <select
+                            value={mannequinTraits.presentation}
+                            onChange={(e) => {
+                              setMannequinTraits({
+                                ...mannequinTraits,
+                                presentation: e.target
+                                  .value as MannequinTraits["presentation"],
+                              });
+                              setMannequinDraft(null);
+                            }}
+                          >
+                            <option value="feminina">Feminina</option>
+                            <option value="masculina">Masculina</option>
+                            <option value="androgina">Andrógina</option>
+                          </select>
+                        </label>
+                        <label>
+                          Tom de pele
+                          <select
+                            value={mannequinTraits.skin}
+                            onChange={(e) => {
+                              setMannequinTraits({
+                                ...mannequinTraits,
+                                skin: e.target.value as MannequinTraits["skin"],
+                              });
+                              setMannequinDraft(null);
+                            }}
+                          >
+                            <option value="clara">Claro</option>
+                            <option value="media">Médio</option>
+                            <option value="escura">Escuro</option>
+                          </select>
+                        </label>
+                        <label>
+                          Cabelo
+                          <select
+                            value={mannequinTraits.hair}
+                            onChange={(e) => {
+                              setMannequinTraits({
+                                ...mannequinTraits,
+                                hair: e.target.value as MannequinTraits["hair"],
+                              });
+                              setMannequinDraft(null);
+                            }}
+                          >
+                            <option value="curto">Curto</option>
+                            <option value="medio">Médio</option>
+                            <option value="longo">Longo</option>
+                            <option value="raspado">Raspado</option>
+                          </select>
+                        </label>
+                        <label>
+                          Biotipo
+                          <select
+                            value={mannequinTraits.build}
+                            onChange={(e) => {
+                              setMannequinTraits({
+                                ...mannequinTraits,
+                                build: e.target
+                                  .value as MannequinTraits["build"],
+                              });
+                              setMannequinDraft(null);
+                            }}
+                          >
+                            <option value="esguio">Esguio</option>
+                            <option value="medio">Médio</option>
+                            <option value="robusto">Robusto</option>
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          disabled={mannequinBusy}
+                          onClick={() => void generateMannequin()}
+                        >
+                          <Sparkles size={16} /> Gerar manequim realista
+                        </button>
+                      </div>
+                    )}
+                    {mannequinBusy && <p role="status">Preparando manequim…</p>}
+                    {mannequinError && (
+                      <p role="alert" className="alert error">
+                        {mannequinError}
+                      </p>
+                    )}
+                    {mannequinDraft && (
+                      <div className="mannequin-draft">
+                        <Image
+                          unoptimized
+                          width={360}
+                          height={400}
+                          src={mannequinDraft}
+                          alt="Prévia do manequim antes de salvar"
+                        />
+                        <div className="catalog-review-actions">
+                          <button
+                            type="button"
+                            className="button"
+                            disabled={mannequinBusy}
+                            onClick={() => void persistMannequin()}
+                          >
+                            <Check size={16} /> Salvar manequim
+                          </button>
+                          <button
+                            type="button"
+                            className="button secondary"
+                            disabled={mannequinBusy}
+                            onClick={() => setMannequinDraft(null)}
+                          >
+                            Descartar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <p className="hint">
+                      Sua foto fica no Storage privado. Gerar manequim ou
+                      experimentar um look envia imagens ao provedor de IA e
+                      consome créditos. A visualização é ilustrativa e não prevê
+                      o caimento real.
+                    </p>
+                  </section>
+                )}
                 <div className="looks-grid">{generated.map(lookCard)}</div>
               </>
             )}
@@ -1380,6 +1828,111 @@ export default function Closet({
               )}
             </div>
           </>
+        )}
+      </dialog>
+      <dialog
+        ref={lookDialogRef}
+        className="detail-dialog look-detail-dialog"
+        aria-labelledby="look-detail-title"
+        onCancel={closeLookDetail}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) closeLookDetail();
+        }}
+      >
+        {lookDetail && data && (
+          <div className="look-detail-content">
+            <button
+              type="button"
+              className="close-button"
+              aria-label="Fechar detalhes do look"
+              onClick={closeLookDetail}
+            >
+              <X />
+            </button>
+            <span className="eyebrow">
+              LOOK PARA {lookDetail.occasion.toUpperCase()}
+            </span>
+            <h2 id="look-detail-title">Detalhes do look</h2>
+            <p>Veja cada peça desta combinação antes de experimentar.</p>
+            <div className="look-detail-pieces">
+              {lookDetail.pieceIds.map((id) => {
+                const piece = data.pieces.find((p) => p.id === id);
+                if (!piece) return null;
+                return (
+                  <article key={id}>
+                    <div className="look-detail-art">
+                      <Garment piece={piece} />
+                    </div>
+                    <div>
+                      <h3>{piece.name}</h3>
+                      <p>
+                        {piece.category} · {piece.color}
+                      </p>
+                      {piece.style && <p>{piece.style}</p>}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            {mode === "personal" &&
+              (mannequin ? (
+                <>
+                  <button
+                    type="button"
+                    className="button full"
+                    disabled={tryOnBusy}
+                    onClick={() => void viewTryOn(lookDetail)}
+                  >
+                    {tryOnBusy ? (
+                      <LoaderCircle size={17} className="spinner" />
+                    ) : (
+                      <Sparkles size={17} />
+                    )}
+                    {tryOnBusy
+                      ? "Gerando visualização…"
+                      : "Ver como ficaria em mim"}
+                  </button>
+                  {tryOnBusy && (
+                    <p role="status">A geração pode levar até dois minutos.</p>
+                  )}
+                  {tryOnError && (
+                    <p role="alert" className="alert error">
+                      {tryOnError}
+                    </p>
+                  )}
+                  {tryOnImage && (
+                    <figure className="try-on-result">
+                      <Image
+                        unoptimized
+                        width={1024}
+                        height={1024}
+                        src={tryOnImage}
+                        alt="Visualização ilustrativa deste look no manequim"
+                      />
+                      <figcaption>
+                        Prévia ilustrativa por IA. Cores, corpo e caimento podem
+                        diferir do real.
+                      </figcaption>
+                    </figure>
+                  )}
+                  <p className="hint">
+                    Cada visualização consome créditos de IA. Suas fotos são
+                    enviadas ao provedor somente quando você toca no botão.
+                  </p>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="button full"
+                  onClick={() => {
+                    closeLookDetail();
+                    navigate("generate");
+                  }}
+                >
+                  Cadastrar manequim para experimentar
+                </button>
+              ))}
+          </div>
         )}
       </dialog>
     </div>

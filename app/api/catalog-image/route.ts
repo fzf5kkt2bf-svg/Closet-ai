@@ -2,6 +2,7 @@ import { generateImage } from "ai";
 import { createClient } from "@supabase/supabase-js";
 import sharp from "sharp";
 import { catalogPrompt } from "@/lib/catalog-image";
+import { categories, colors } from "@/lib/closet";
 import { PHOTO_BUCKET } from "@/lib/supabase";
 
 export const runtime = "nodejs";
@@ -15,6 +16,8 @@ function reply(message: string, status: number) {
 }
 
 export async function POST(request: Request) {
+  if (Number(request.headers.get("content-length") ?? 0) > 4 * 1024 * 1024)
+    return reply("A foto é grande demais para geração.", 413);
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (!url || !key) return reply("Supabase não configurado.", 503);
@@ -22,11 +25,32 @@ export async function POST(request: Request) {
     .get("authorization")
     ?.match(/^Bearer (.+)$/i)?.[1];
   if (!token) return reply("Entre na sua conta para continuar.", 401);
-  let pieceId: string;
+  let pieceId: string | undefined;
+  let uploadedPhoto: string | undefined;
+  let draftDetails:
+    | { name: string; category: string; color: string; style: string }
+    | undefined;
   try {
     const body = await request.json();
     pieceId = body.pieceId;
-    if (
+    if (typeof body.photo === "string") {
+      const photo = body.photo;
+      const details = body.details;
+      if (
+        !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo) ||
+        photo.length > 4 * 1024 * 1024 ||
+        !details ||
+        typeof details.name !== "string" ||
+        details.name.length > 80 ||
+        typeof details.style !== "string" ||
+        details.style.length > 80 ||
+        !categories.includes(details.category) ||
+        !Object.hasOwn(colors, details.color)
+      )
+        return reply("Foto ou informações da peça inválidas.", 400);
+      uploadedPhoto = photo;
+      draftDetails = details;
+    } else if (
       typeof pieceId !== "string" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
         pieceId,
@@ -43,29 +67,61 @@ export async function POST(request: Request) {
   const { data: auth, error: authError } = await api.auth.getUser(token);
   if (authError || !auth.user)
     return reply("Sua sessão expirou. Entre novamente.", 401);
-  const { data: item, error: itemError } = await api
-    .from("clothing_items")
-    .select("id,user_id,name,category,color,style,photo_path")
-    .eq("id", pieceId)
-    .eq("user_id", auth.user.id)
-    .maybeSingle();
-  if (itemError) return reply("Não foi possível consultar a peça.", 502);
-  if (!item?.photo_path)
-    return reply(
-      "Salve uma foto original antes de gerar a versão de catálogo.",
-      404,
-    );
-  const { data: original, error: downloadError } = await api.storage
-    .from(PHOTO_BUCKET)
-    .download(item.photo_path);
-  if (downloadError || !original)
-    return reply("Não foi possível abrir a foto original.", 502);
-  if (original.size > 6 * 1024 * 1024) return reply("A foto excede 6 MB.", 413);
+  let source: Uint8Array;
+  let itemDetails: {
+    name: string;
+    category: string;
+    color: string;
+    style: string;
+  };
+  if (uploadedPhoto && draftDetails) {
+    source = new Uint8Array(Buffer.from(uploadedPhoto.split(",")[1], "base64"));
+    if (source.length > 3 * 1024 * 1024)
+      return reply("A foto excede 3 MB para geração.", 413);
+    try {
+      const metadata = await sharp(source).metadata();
+      if (
+        metadata.format !== "jpeg" ||
+        !metadata.width ||
+        !metadata.height ||
+        metadata.width > 2400 ||
+        metadata.height > 2400
+      )
+        return reply(
+          "A foto precisa ser um JPEG válido de até 2.400 pixels por lado.",
+          400,
+        );
+    } catch {
+      return reply("A foto enviada é inválida.", 400);
+    }
+    itemDetails = draftDetails;
+  } else {
+    const { data: item, error: itemError } = await api
+      .from("clothing_items")
+      .select("id,user_id,name,category,color,style,photo_path")
+      .eq("id", pieceId)
+      .eq("user_id", auth.user.id)
+      .maybeSingle();
+    if (itemError) return reply("Não foi possível consultar a peça.", 502);
+    if (!item?.photo_path)
+      return reply(
+        "Salve uma foto original antes de gerar a versão de catálogo.",
+        404,
+      );
+    const { data: original, error: downloadError } = await api.storage
+      .from(PHOTO_BUCKET)
+      .download(item.photo_path);
+    if (downloadError || !original)
+      return reply("Não foi possível abrir a foto original.", 502);
+    if (original.size > 6 * 1024 * 1024)
+      return reply("A foto excede 6 MB.", 413);
+    source = new Uint8Array(await original.arrayBuffer());
+    itemDetails = item;
+  }
   try {
-    const source = new Uint8Array(await original.arrayBuffer());
     const { image } = await generateImage({
       model: "openai/gpt-image-1-mini",
-      prompt: { text: catalogPrompt(item), images: [source] },
+      prompt: { text: catalogPrompt(itemDetails), images: [source] },
       size: "1024x1024",
       abortSignal: AbortSignal.timeout(100_000),
     });
