@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   try {
     const source = new Uint8Array(await original.arrayBuffer());
     const { image } = await generateImage({
-      model: "openai/gpt-image-2.5-sunburst",
+      model: "openai/gpt-image-1-mini",
       prompt: { text: catalogPrompt(item), images: [source] },
       size: "1024x1024",
       abortSignal: AbortSignal.timeout(100_000),
