@@ -44,7 +44,7 @@ test("migration creates private schema and RLS separates two users", async () =>
     await db.exec(
       await readFile(
         new URL(
-          "../supabase/migrations/20261025181705_mannequin_profile.sql",
+          "../supabase/migrations/20261025185725_mannequin_profile.sql",
           import.meta.url,
         ),
         "utf8",
